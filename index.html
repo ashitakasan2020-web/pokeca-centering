@@ -1,0 +1,1628 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>ポケカ センタリング判定</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', sans-serif;
+    background: linear-gradient(135deg, #0d1117 0%, #161b22 50%, #0d1117 100%);
+    min-height: 100vh;
+    color: #e6edf3;
+    padding: 12px;
+  }
+  .header { text-align: center; padding: 18px 0 14px; }
+  .header h1 { font-size: 1.2rem; font-weight: 700; color: #f0c040; text-shadow: 0 0 20px rgba(240,192,64,0.4); }
+  .header .subtitle { font-size: 0.72rem; color: #8b949e; margin-top: 4px; }
+  .header .badge {
+    display: inline-block; background: #21262d; color: #8b949e; font-size: 0.62rem;
+    padding: 2px 8px; border-radius: 10px; margin-top: 6px; border: 1px solid #30363d;
+  }
+
+  .section { max-width: 480px; margin: 0 auto; }
+
+  .mode-tabs { display: flex; gap: 8px; margin-bottom: 10px; }
+  .mode-tab {
+    flex: 1; padding: 10px; border-radius: 10px; border: 1px solid #30363d; background: #161b22;
+    color: #8b949e; font-size: 0.78rem; font-weight: 700; cursor: pointer;
+  }
+  .mode-tab.active { background: #21262d; color: #f0c040; border-color: #f0c040; }
+
+  .btn-group { display: flex; gap: 8px; }
+  .btn {
+    flex: 1; padding: 13px 10px; border: none; border-radius: 10px; font-size: 0.85rem;
+    font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 5px;
+  }
+  .btn-camera { background: linear-gradient(135deg, #f0c040, #d4a020); color: #0d1117; }
+  .btn-file { background: linear-gradient(135deg, #388bfd, #1f6feb); color: #fff; }
+  .btn-reset { background: #21262d; color: #8b949e; border: 1px solid #30363d; }
+  .btn:active { transform: scale(0.97); }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  input[type=file] { display: none; }
+
+  .corner-progress { display: flex; gap: 6px; margin-bottom: 10px; }
+  .corner-step {
+    flex: 1; text-align: center; padding: 6px 2px; border-radius: 8px; font-size: 0.68rem;
+    background: #161b22; color: #8b949e; border: 1px solid #30363d;
+  }
+  .corner-step.done { background: rgba(63,185,80,0.15); color: #3fb950; border-color: rgba(63,185,80,0.4); }
+  .corner-step.active { background: rgba(240,192,64,0.15); color: #f0c040; border-color: #f0c040; }
+
+  .corner-instruction {
+    text-align: center; font-size: 0.9rem; font-weight: 700; color: #f0c040; margin-bottom: 10px;
+  }
+
+  .corner-rotate-toggle {
+    display: flex; align-items: center; gap: 6px; font-size: 0.8rem; color: #9aa4b2;
+    justify-content: center; margin-bottom: 10px; cursor: pointer;
+  }
+  .corner-rotate-toggle input { width: 16px; height: 16px; }
+
+  .corner-thumbs { display: flex; gap: 8px; margin-top: 10px; }
+  .corner-thumbs img {
+    width: 100%; border-radius: 6px; border: 1px solid #30363d; aspect-ratio: 1; object-fit: cover;
+  }
+
+  #status-line {
+    text-align: center; font-size: 0.75rem; color: #8b949e; margin-top: 10px; min-height: 18px;
+  }
+
+  #canvas-wrap {
+    width: 100%; margin-top: 12px; display: none;
+    border-radius: 10px; overflow: hidden; border: 1px solid #30363d;
+  }
+  #output-canvas { width: 100%; display: block; background: #010409; }
+
+  #result-section { margin-top: 12px; display: none; }
+  .card-box {
+    background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 14px; margin-bottom: 10px;
+  }
+  .card-box .section-label {
+    font-size: 0.65rem; text-transform: uppercase; letter-spacing: 1px; color: #8b949e; margin-bottom: 8px;
+  }
+  .ratio-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #21262d; }
+  .ratio-row:last-child { border-bottom: none; }
+  .ratio-label { font-size: 0.8rem; color: #8b949e; }
+  .ratio-value { font-size: 1.15rem; font-weight: 700; color: #e6edf3; }
+  .ratio-bar { height: 8px; border-radius: 4px; background: #21262d; margin-top: 6px; overflow: hidden; display: flex; }
+  .ratio-bar .fill-a { background: #3fb950; }
+  .ratio-bar .fill-b { background: #30363d; }
+
+  .grade-box { text-align: center; padding: 18px; }
+  .grade-value { font-size: 2.4rem; font-weight: 800; color: #f0c040; text-shadow: 0 0 20px rgba(240,192,64,0.4); }
+  .grade-caption { font-size: 0.75rem; color: #8b949e; margin-top: 4px; }
+
+  .thumb-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .thumb-grid img { width: 100%; border-radius: 6px; border: 1px solid #30363d; }
+  .thumb-grid .thumb-cap { font-size: 0.65rem; color: #8b949e; text-align: center; margin-top: 3px; }
+
+  .error-msg {
+    color: #ff7b72; text-align: center; padding: 14px; background: rgba(248,81,73,0.08);
+    border-radius: 10px; border: 1px solid rgba(248,81,73,0.2); font-size: 0.82rem; margin-top: 12px;
+  }
+  .hint {
+    font-size: 0.68rem; color: #8b949e; text-align: center; margin-top: 10px; line-height: 1.5;
+  }
+
+  .manual-instruction {
+    text-align: center; font-size: 0.88rem; font-weight: 700; color: #f0c040; margin-bottom: 4px;
+  }
+  .manual-substatus {
+    text-align: center; font-size: 0.72rem; color: #8b949e; margin-bottom: 10px;
+  }
+  .manual-progress { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; }
+  .manual-progress .mstep {
+    flex: 1 0 22%; text-align: center; padding: 4px 2px; border-radius: 6px; font-size: 0.6rem;
+    background: #161b22; color: #8b949e; border: 1px solid #30363d; cursor: default;
+  }
+  .manual-progress .mstep.done, .manual-progress .mstep.active { cursor: pointer; }
+  .manual-progress .mstep.done { background: rgba(63,185,80,0.15); color: #3fb950; border-color: rgba(63,185,80,0.4); }
+  .manual-progress .mstep.active { background: rgba(240,192,64,0.15); color: #f0c040; border-color: #f0c040; }
+
+  #manual-viewport {
+    width: 100%; height: 62vh; max-height: 520px; overflow: hidden; position: relative;
+    border-radius: 10px; border: 1px solid #30363d; background: #010409;
+    touch-action: none; display: none;
+  }
+  #manual-canvas { position: absolute; top: 0; left: 0; transform-origin: 0 0; cursor: crosshair; touch-action: none; }
+
+  .manual-btn-row { display: flex; gap: 8px; margin-top: 8px; }
+  .manual-zoom-hint {
+    font-size: 0.66rem; color: #6e7681; text-align: center; margin-top: 6px;
+  }
+</style>
+</head>
+<body>
+
+  <div class="header">
+    <h1>📐 ポケカ センタリング判定</h1>
+    <div class="subtitle">カードを撮影して枠のセンタリングを自動計測</div>
+    <div class="badge">MVP版 / PSA基準(2025年2月改定)対応</div>
+  </div>
+
+  <div class="section">
+    <div class="mode-tabs">
+      <button class="mode-tab active" id="mode-full-btn">🃏 カード全体を撮影</button>
+      <button class="mode-tab" id="mode-corner-btn">📐 4隅を個別に撮影</button>
+      <button class="mode-tab" id="mode-manual-btn">✏️ 手動計測</button>
+    </div>
+
+    <!-- 全体撮影モード -->
+    <div id="full-mode-ui">
+      <div class="btn-group">
+        <button class="btn btn-camera" id="camera-btn">📷 カメラで撮影</button>
+        <button class="btn btn-file" id="file-btn">🖼️ ギャラリーから</button>
+      </div>
+    </div>
+
+    <!-- 4隅撮影モード -->
+    <div id="corner-mode-ui" style="display:none;">
+      <div class="corner-progress" id="corner-progress">
+        <div class="corner-step" data-idx="0">①左上</div>
+        <div class="corner-step" data-idx="1">②右上</div>
+        <div class="corner-step" data-idx="2">③左下</div>
+        <div class="corner-step" data-idx="3">④右下</div>
+      </div>
+      <div class="corner-instruction" id="corner-instruction">① 左上の角を撮影してください</div>
+      <label class="corner-rotate-toggle">
+        <input type="checkbox" id="corner-rotate-checkbox" />
+        🔄 カードを90度回転させて（横向きにして）撮影しました
+      </label>
+      <div class="btn-group">
+        <button class="btn btn-camera" id="corner-camera-btn">📷 カメラで撮影</button>
+        <button class="btn btn-file" id="corner-file-btn">🖼️ ギャラリーから</button>
+      </div>
+      <button class="btn btn-reset" id="corner-reset-btn" style="margin-top:8px;display:none;">🔄 最初からやり直す</button>
+      <div class="corner-thumbs" id="corner-thumbs"></div>
+    </div>
+
+    <!-- 手動計測モード -->
+    <div id="manual-mode-ui" style="display:none;">
+      <div class="btn-group" id="manual-capture-btns">
+        <button class="btn btn-camera" id="manual-camera-btn">📷 カメラで撮影</button>
+        <button class="btn btn-file" id="manual-file-btn">🖼️ ギャラリーから</button>
+      </div>
+
+      <div class="manual-instruction" id="manual-instruction" style="display:none;"></div>
+      <div class="manual-substatus" id="manual-substatus"></div>
+      <div class="manual-progress" id="manual-progress" style="display:none;">
+        <div class="mstep" data-idx="0">左外</div>
+        <div class="mstep" data-idx="1">左内</div>
+        <div class="mstep" data-idx="2">右外</div>
+        <div class="mstep" data-idx="3">右内</div>
+        <div class="mstep" data-idx="4">上外</div>
+        <div class="mstep" data-idx="5">上内</div>
+        <div class="mstep" data-idx="6">下外</div>
+        <div class="mstep" data-idx="7">下内</div>
+      </div>
+
+      <div id="manual-viewport"><canvas id="manual-canvas"></canvas></div>
+      <div class="manual-zoom-hint" id="manual-zoom-hint" style="display:none;">🔍 ピンチで拡大・指1本でドラッグして移動、線の上を2点タップ</div>
+
+      <div class="manual-btn-row" id="manual-action-btns" style="display:none;">
+        <button class="btn btn-reset" id="manual-undo-btn">↩️ 1点戻す</button>
+        <button class="btn btn-reset" id="manual-reset-btn">🔄 最初からやり直す</button>
+      </div>
+    </div>
+
+    <input type="file" id="file-input-camera" accept="image/*" capture="environment" />
+    <input type="file" id="file-input-gallery" accept="image/*" />
+
+    <div id="status-line">画像を選択してください</div>
+
+    <div id="canvas-wrap">
+      <canvas id="output-canvas"></canvas>
+    </div>
+
+    <div id="result-section"></div>
+
+    <div class="hint" id="hint-text">
+      白い紙や黒いマットな布など、光沢・シワのない無地の平らな背景の上に、カード全体が画面いっぱいに収まるよう真上から水平に撮影してください（光沢のある布・木目・凹凸のある背景は誤検出の原因になります）。
+    </div>
+  </div>
+
+  <script async src="opencv.js" onload="onOpenCvLoaded()"></script>
+  <script>
+    let cvReady = false;
+    function onOpenCvLoaded() {
+      // WASM初期化が非常に高速な環境だと、onRuntimeInitializedを登録する前に
+      // 既に初期化が完了してしまい、コールバックが一生呼ばれないケースがある。
+      // そのためPromise形式(cv.then)を優先し、無ければ初期化済みかどうかを直接確認する。
+      const markReady = () => {
+        if (cvReady) return;
+        cvReady = true;
+        setStatus('準備完了。画像を選択してください');
+      };
+      if (typeof cv.then === 'function') {
+        cv.then(markReady);
+      } else if (cv.Mat) {
+        markReady();
+      } else {
+        cv['onRuntimeInitialized'] = markReady;
+      }
+    }
+
+    // ============ モード管理 ============
+    const CORNER_NAMES = ['topLeft', 'topRight', 'bottomLeft', 'bottomRight'];
+    const CORNER_LABELS = {
+      topLeft: '① 左上の角を撮影してください',
+      topRight: '② 右上の角を撮影してください',
+      bottomLeft: '③ 左下の角を撮影してください',
+      bottomRight: '④ 右下の角を撮影してください',
+    };
+
+    let mode = 'full'; // 'full' | 'corner' | 'manual'
+    let cornerStep = 0;
+    let cornerData = {}; // { topLeft: {horizBorderWidth, vertBorderWidth}, ... }（上下左右どちらの辺かは統合時に決定）
+
+    const modeFullBtn = document.getElementById('mode-full-btn');
+    const modeCornerBtn = document.getElementById('mode-corner-btn');
+    const modeManualBtn = document.getElementById('mode-manual-btn');
+    const fullModeUI = document.getElementById('full-mode-ui');
+    const cornerModeUI = document.getElementById('corner-mode-ui');
+    const manualModeUI = document.getElementById('manual-mode-ui');
+    const cornerInstruction = document.getElementById('corner-instruction');
+    const cornerProgress = document.getElementById('corner-progress');
+    const cornerThumbs = document.getElementById('corner-thumbs');
+    const cornerResetBtn = document.getElementById('corner-reset-btn');
+    const cornerRotateCheckbox = document.getElementById('corner-rotate-checkbox');
+    const hintText = document.getElementById('hint-text');
+
+    const FULL_HINT = '白い紙や黒いマットな布など、光沢・シワのない無地の平らな背景の上に、カード全体が画面いっぱいに収まるよう真上から水平に撮影してください（光沢のある布・木目・凹凸のある背景は誤検出の原因になります）。';
+    const CORNER_HINT = '角を中心に、その角に接する2辺がはっきり写るように撮影してください（4枚の距離・ズームは揃っていなくても構いません）。指で辺を隠さないようご注意ください。片手で持ちやすいようカード自体を横向き（90度回転）にして撮影した場合は、上のチェックボックスをONにしてください。';
+    const MANUAL_HINT = 'カード全体が写った写真を1枚撮影してください。自動で傾きを補正した画像が表示されるので、ピンチ操作で拡大しながら各辺の「外側の線」「内側の線」を2点タップで指定してください。';
+
+    modeFullBtn.addEventListener('click', () => setMode('full'));
+    modeCornerBtn.addEventListener('click', () => setMode('corner'));
+    modeManualBtn.addEventListener('click', () => setMode('manual'));
+    cornerResetBtn.addEventListener('click', resetCornerFlow);
+
+    function setMode(newMode) {
+      mode = newMode;
+      modeFullBtn.classList.toggle('active', mode === 'full');
+      modeCornerBtn.classList.toggle('active', mode === 'corner');
+      modeManualBtn.classList.toggle('active', mode === 'manual');
+      fullModeUI.style.display = mode === 'full' ? 'block' : 'none';
+      cornerModeUI.style.display = mode === 'corner' ? 'block' : 'none';
+      manualModeUI.style.display = mode === 'manual' ? 'block' : 'none';
+      hintText.textContent = mode === 'full' ? FULL_HINT : mode === 'corner' ? CORNER_HINT : MANUAL_HINT;
+      resultSection.style.display = 'none';
+      resultSection.innerHTML = '';
+      canvasWrap.style.display = 'none';
+      if (mode === 'corner') resetCornerFlow();
+      if (mode === 'manual') resetManualFlow();
+    }
+
+    function resetCornerFlow() {
+      cornerStep = 0;
+      cornerData = {};
+      cornerThumbs.innerHTML = '';
+      cornerResetBtn.style.display = 'none';
+      updateCornerProgressUI();
+      setStatus('4隅を順番に撮影してください');
+    }
+
+    function updateCornerProgressUI() {
+      const steps = cornerProgress.querySelectorAll('.corner-step');
+      steps.forEach((el, i) => {
+        el.classList.toggle('done', i < cornerStep);
+        el.classList.toggle('active', i === cornerStep);
+      });
+      if (cornerStep < CORNER_NAMES.length) {
+        cornerInstruction.textContent = CORNER_LABELS[CORNER_NAMES[cornerStep]];
+      }
+    }
+
+    // ============ 撮影・ファイル入力 ============
+
+    const cameraBtn = document.getElementById('camera-btn');
+    const fileBtn = document.getElementById('file-btn');
+    const cornerCameraBtn = document.getElementById('corner-camera-btn');
+    const cornerFileBtn = document.getElementById('corner-file-btn');
+    const manualCameraBtn = document.getElementById('manual-camera-btn');
+    const manualFileBtn = document.getElementById('manual-file-btn');
+    const fileInputCamera = document.getElementById('file-input-camera');
+    const fileInputGallery = document.getElementById('file-input-gallery');
+    const statusLine = document.getElementById('status-line');
+    const canvasWrap = document.getElementById('canvas-wrap');
+    const canvas = document.getElementById('output-canvas');
+    const resultSection = document.getElementById('result-section');
+
+    setStatus('OpenCV.js 読み込み中...');
+
+    cameraBtn.addEventListener('click', () => { fileInputCamera.value = ''; fileInputCamera.click(); });
+    fileBtn.addEventListener('click', () => { fileInputGallery.value = ''; fileInputGallery.click(); });
+    cornerCameraBtn.addEventListener('click', () => { fileInputCamera.value = ''; fileInputCamera.click(); });
+    cornerFileBtn.addEventListener('click', () => { fileInputGallery.value = ''; fileInputGallery.click(); });
+    manualCameraBtn.addEventListener('click', () => { fileInputCamera.value = ''; fileInputCamera.click(); });
+    manualFileBtn.addEventListener('click', () => { fileInputGallery.value = ''; fileInputGallery.click(); });
+    fileInputCamera.addEventListener('change', e => handleFile(e.target.files[0]));
+    fileInputGallery.addEventListener('change', e => handleFile(e.target.files[0]));
+
+    function setStatus(text) { statusLine.textContent = text; }
+
+    function handleFile(file) {
+      if (!file) return;
+      if (!cvReady) { setStatus('OpenCV.js の読み込みが終わっていません。少し待って再試行してください'); return; }
+
+      resultSection.style.display = 'none';
+      resultSection.innerHTML = '';
+
+      const img = new Image();
+      img.onload = () => {
+        try {
+          if (mode === 'full') {
+            setStatus('画像を解析中...');
+            analyzeImage(img);
+          } else if (mode === 'corner') {
+            handleCornerCapture(img, file);
+          } else {
+            startManualCapture(img);
+          }
+        } catch (e) {
+          console.error(e);
+          showError('解析中にエラーが発生しました: ' + e.message);
+        }
+      };
+      img.src = URL.createObjectURL(file);
+    }
+
+    function showError(msg) {
+      setStatus('');
+      resultSection.style.display = 'block';
+      resultSection.innerHTML = `<div class="error-msg">⚠️ ${msg}</div>`;
+    }
+
+    // ============ 4隅撮影モード ============
+
+    function handleCornerCapture(imgElement, file) {
+      const cornerName = CORNER_NAMES[cornerStep];
+      setStatus(`${cornerLabelShort(cornerName)}を解析中...`);
+
+      const result = analyzeCornerImage(imgElement, cornerName);
+      if (window.DEBUG_PROFILE) console.log('CORNER_RESULT', cornerName, JSON.stringify(result));
+      if (!result) {
+        showError(`${cornerLabelShort(cornerName)}の輪郭を検出できませんでした。角を中心に、はっきり写るよう撮り直してください。`);
+        return;
+      }
+
+      cornerData[cornerName] = result;
+
+      const thumb = document.createElement('img');
+      thumb.src = URL.createObjectURL(file);
+      cornerThumbs.appendChild(thumb);
+
+      cornerStep++;
+      cornerResetBtn.style.display = 'block';
+
+      if (cornerStep >= CORNER_NAMES.length) {
+        setStatus('');
+        cornerInstruction.textContent = '✅ 4隅すべて撮影完了';
+        combineCornersAndRender();
+      } else {
+        updateCornerProgressUI();
+        setStatus('');
+      }
+    }
+
+    function cornerLabelShort(name) {
+      return { topLeft: '左上', topRight: '右上', bottomLeft: '左下', bottomRight: '右下' }[name];
+    }
+
+    // 1つの角の写真から、交わる2辺（水平寄り・垂直寄り）を検出し、
+    // 傾きを回転補正した上でその角から内側へのボーダー幅を2方向計測する
+    function analyzeCornerImage(imgElement, cornerName) {
+      const MAX_DIM = 1000;
+      let scale = 1;
+      if (imgElement.width > MAX_DIM || imgElement.height > MAX_DIM) {
+        scale = MAX_DIM / Math.max(imgElement.width, imgElement.height);
+      }
+      const srcCanvas = document.createElement('canvas');
+      srcCanvas.width = Math.round(imgElement.width * scale);
+      srcCanvas.height = Math.round(imgElement.height * scale);
+      srcCanvas.getContext('2d').drawImage(imgElement, 0, 0, srcCanvas.width, srcCanvas.height);
+
+      const mats = [];
+      const track = (m) => { mats.push(m); return m; };
+
+      try {
+        const src = track(cv.imread(srcCanvas));
+        const blurred = track(new cv.Mat());
+        cv.GaussianBlur(src, blurred, new cv.Size(5, 5), 0);
+        const gray = track(new cv.Mat());
+        cv.cvtColor(blurred, gray, cv.COLOR_RGBA2GRAY);
+        const edges = track(new cv.Mat());
+        cv.Canny(gray, edges, 50, 150);
+
+        const lines = track(new cv.Mat());
+        const minLineLen = Math.min(src.cols, src.rows) * 0.2;
+        cv.HoughLinesP(edges, lines, 1, Math.PI / 180, 50, minLineLen, 15);
+
+        const segments = [];
+        for (let i = 0; i < lines.rows; i++) {
+          const x1 = lines.data32S[i * 4], y1 = lines.data32S[i * 4 + 1];
+          const x2 = lines.data32S[i * 4 + 2], y2 = lines.data32S[i * 4 + 3];
+          segments.push({ x1, y1, x2, y2 });
+        }
+        if (segments.length < 2) return null;
+
+        const pair = findCornerLinePair(segments);
+        if (!pair) return null;
+        const [lineA, lineB] = pair;
+
+        const cornerPt = lineIntersection(
+          { x: lineA.x1, y: lineA.y1 }, { x: lineA.x2, y: lineA.y2 },
+          { x: lineB.x1, y: lineB.y1 }, { x: lineB.x2, y: lineB.y2 }
+        );
+        if (!cornerPt) return null;
+
+        // より水平に近い線を基準に回転角を決める
+        const toSigned = (a) => (a > 90 ? a - 180 : a); // -90〜90
+        const angleA = toSigned(angleOf(lineA));
+        const angleB = toSigned(angleOf(lineB));
+        const horizIsA = Math.abs(angleA) < Math.abs(angleB);
+        const rotationDeg = horizIsA ? angleA : angleB;
+
+        if (Math.abs(rotationDeg) > 45) return null; // 想定外の線分ペア
+
+        const imgCenter = new cv.Point(src.cols / 2, src.rows / 2);
+        const M = cv.getRotationMatrix2D(imgCenter, rotationDeg, 1.0);
+        const rotated = track(new cv.Mat());
+        cv.warpAffine(src, rotated, M, new cv.Size(src.cols, src.rows), cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar());
+
+        const m = M.data64F; // [a,b,tx, c,d,ty]
+        const newCornerX = m[0] * cornerPt.x + m[1] * cornerPt.y + m[2];
+        const newCornerY = m[3] * cornerPt.x + m[4] * cornerPt.y + m[5];
+        M.delete();
+
+        if (newCornerX < 0 || newCornerX >= rotated.cols || newCornerY < 0 || newCornerY >= rotated.rows) return null;
+
+        // カード内部方向をフレーム中心方向として推定する
+        const towardCenterX = (rotated.cols / 2) - newCornerX;
+        const towardCenterY = (rotated.rows / 2) - newCornerY;
+        const horizDir = towardCenterX >= 0 ? 1 : -1;
+        const vertDir = towardCenterY >= 0 ? 1 : -1;
+
+        const rGray = track(new cv.Mat());
+        cv.cvtColor(rotated, rGray, cv.COLOR_RGBA2GRAY);
+        const gradX = track(new cv.Mat()), gradY = track(new cv.Mat());
+        cv.Sobel(rGray, gradX, cv.CV_32F, 1, 0, 3);
+        cv.Sobel(rGray, gradY, cv.CV_32F, 0, 1, 3);
+
+        const maxScanPx = Math.round(Math.min(rotated.cols, rotated.rows) * 0.4);
+
+        const vertBorderWidth = scanBorderWidthFromCorner(gradX, rotated.cols, rotated.rows, false, newCornerX, newCornerY, horizDir, maxScanPx);
+        const horizBorderWidth = scanBorderWidthFromCorner(gradY, rotated.cols, rotated.rows, true, newCornerX, newCornerY, vertDir, maxScanPx);
+
+        // カードが撮影時に大きく回転している場合（90度近く）、検出した2線のどちらが
+        // 本来「上/下」の辺でどちらが「左/右」の辺かをこの時点だけでは確定できない
+        // （±45度を超える回転だと取り違える恐れがある）。そのため生の測定値のみ返し、
+        // 上/左などのラベル付けは4隅を統合する combineCornersAndRender 側で決定する。
+        return { horizBorderWidth, vertBorderWidth };
+      } finally {
+        cleanup(mats);
+      }
+    }
+
+    // 長い線分上位数本の中から、ほぼ直交する2本の組み合わせで最もスコア（長さ合計）が高いペアを探す
+    function findCornerLinePair(segments) {
+      const sorted = [...segments].sort((a, b) => segLength(b) - segLength(a));
+      const top = sorted.slice(0, Math.min(12, sorted.length));
+      let best = null, bestScore = -1;
+      for (let i = 0; i < top.length; i++) {
+        for (let j = i + 1; j < top.length; j++) {
+          let diff = Math.abs(angleOf(top[i]) - angleOf(top[j]));
+          if (diff > 90) diff = 180 - diff;
+          const perpDiff = Math.abs(diff - 90);
+          if (perpDiff < 20) {
+            const score = segLength(top[i]) + segLength(top[j]);
+            if (score > bestScore) { bestScore = score; best = [top[i], top[j]]; }
+          }
+        }
+      }
+      return best;
+    }
+
+    // 角の座標(cornerX, cornerY)から指定方向へ走査し、ボーダー→柄の境界までの距離を求める。
+    // isVerticalScan=trueならY方向に走査（水平な辺=上/下のボーダー幅を求める）、
+    // falseならX方向に走査（垂直な辺=左/右のボーダー幅を求める）。
+    function scanBorderWidthFromCorner(gradMat, cols, rows, isVerticalScan, cornerX, cornerY, direction, maxScanPx) {
+      const bandHalf = Math.round((isVerticalScan ? cols : rows) * 0.15);
+      const bandCenter = isVerticalScan ? cornerX : cornerY;
+      const bandStart = Math.max(0, Math.round(bandCenter - bandHalf));
+      const bandEnd = Math.min(isVerticalScan ? cols : rows, Math.round(bandCenter + bandHalf));
+      const startCoord = isVerticalScan ? cornerY : cornerX;
+
+      function bandAvg(fixedIdx) {
+        let sum = 0, count = 0;
+        for (let j = bandStart; j < bandEnd; j++) {
+          const r = isVerticalScan ? fixedIdx : j;
+          const c = isVerticalScan ? j : fixedIdx;
+          if (r < 0 || r >= rows || c < 0 || c >= cols) continue;
+          sum += Math.abs(gradMat.data32F[r * cols + c]);
+          count++;
+        }
+        return count > 0 ? sum / count : 0;
+      }
+
+      const skip = 4;
+      const raw = [];
+      for (let i = skip; i < maxScanPx; i++) {
+        const idx = Math.round(startCoord + direction * i);
+        raw.push(bandAvg(idx));
+      }
+      if (raw.length < 20) return Math.round(maxScanPx * 0.3);
+
+      const smoothWindow = 4;
+      const smoothed = raw.map((_, i) => {
+        const lo = Math.max(0, i - smoothWindow), hi = Math.min(raw.length, i + smoothWindow + 1);
+        let s = 0;
+        for (let k = lo; k < hi; k++) s += raw[k];
+        return s / (hi - lo);
+      });
+
+      const stepWindow = 6;
+      let foundOffset = 0, bestStep = -Infinity;
+      for (let i = stepWindow; i < smoothed.length - stepWindow; i++) {
+        let before = 0, after = 0;
+        for (let k = i - stepWindow; k < i; k++) before += smoothed[k];
+        for (let k = i; k < i + stepWindow; k++) after += smoothed[k];
+        const step = (after - before) / stepWindow;
+        if (step > bestStep) { bestStep = step; foundOffset = i; }
+      }
+      return skip + foundOffset;
+    }
+
+    // 4枚の写真は距離・ズームが揃っていない前提のため、絶対ピクセル値は直接比較できない。
+    // 各写真「内」の辺の太さの比（スケールに依存しない）を、隣り合う写真同士が共有する辺
+    // （例: 左上写真の上辺 と 右上写真の上辺は同じ物理的な辺）を介して掛け合わせることで、
+    // スケールをキャンセルしながら左右比・上下比を求める。
+    // 上辺経由/下辺経由（左右比）、左辺経由/右辺経由（上下比）の2通りが独立に求まるため、
+    // 平均を取りつつ、両者の乖離が大きい場合は撮影ミスの兆候として警告する。
+    // 角の生測定値{horizBorderWidth, vertBorderWidth}を、swapフラグに応じて
+    // {top,left}等のラベル付きオブジェクトに変換する。
+    function labelCorner(cornerName, swap, raw) {
+      const a = swap ? raw.vertBorderWidth : raw.horizBorderWidth;
+      const b = swap ? raw.horizBorderWidth : raw.vertBorderWidth;
+      if (cornerName === 'topLeft') return { top: a, left: b };
+      if (cornerName === 'topRight') return { top: a, right: b };
+      if (cornerName === 'bottomRight') return { bottom: a, right: b };
+      if (cornerName === 'bottomLeft') return { bottom: a, left: b };
+    }
+
+    function computeRatiosFor(tl, tr, br, bl) {
+      const r_TL = tl.left / tl.top;     // L/T（左上写真内で計測、スケール非依存）
+      const r_TR = tr.top / tr.right;    // T/R
+      const r_BR = br.right / br.bottom; // R/B
+      const r_BL = bl.bottom / bl.left;  // B/L
+
+      const lrSample1 = r_TL * r_TR;        // L/R（上辺経由）
+      const lrSample2 = 1 / (r_BR * r_BL);  // L/R（下辺経由）
+      const tbSample1 = 1 / (r_TL * r_BL);  // T/B（左辺経由）
+      const tbSample2 = r_TR * r_BR;        // T/B（右辺経由）
+
+      const lrSamplePercents = [lrSample1, lrSample2].map(r => 100 * r / (1 + r));
+      const tbSamplePercents = [tbSample1, tbSample2].map(r => 100 * r / (1 + r));
+      const lrDiff = Math.abs(lrSamplePercents[0] - lrSamplePercents[1]);
+      const tbDiff = Math.abs(tbSamplePercents[0] - tbSamplePercents[1]);
+
+      return { lrSample1, lrSample2, tbSample1, tbSample2, lrSamplePercents, tbSamplePercents, lrDiff, tbDiff };
+    }
+
+    function combineCornersAndRender() {
+      const raw = {
+        topLeft: cornerData.topLeft,
+        topRight: cornerData.topRight,
+        bottomRight: cornerData.bottomRight,
+        bottomLeft: cornerData.bottomLeft,
+      };
+
+      // 撮影時にカードを大きく回転させた（例:90度横向きに持った）場合、
+      // 各角で検出した2本の線のどちらが上/下でどちらが左/右かを
+      // 1枚の写真だけからは判定できない。
+      // 「カードを90度回転させて撮影した」チェックがONなら、その前提を基準(baseSwap)にし、
+      // さらに1隅だけ向きがずれてしまうような撮影ミスにも対応できるよう、
+      // 4隅×2通り(baseSwapに対する相対反転)=16通りを試して最も2サンプルの一致度が高い
+      // （乖離が最小の）組み合わせを採用する。
+      const baseSwap = !!(cornerRotateCheckbox && cornerRotateCheckbox.checked);
+
+      let best = null;
+      for (let mask = 0; mask < 16; mask++) {
+        const swaps = [!!(mask & 1), !!(mask & 2), !!(mask & 4), !!(mask & 8)].map(s => s !== baseSwap);
+        const tl = labelCorner('topLeft', swaps[0], raw.topLeft);
+        const tr = labelCorner('topRight', swaps[1], raw.topRight);
+        const br = labelCorner('bottomRight', swaps[2], raw.bottomRight);
+        const bl = labelCorner('bottomLeft', swaps[3], raw.bottomLeft);
+        const combo = computeRatiosFor(tl, tr, br, bl);
+        const score = combo.lrDiff + combo.tbDiff;
+        if (!best || score < best.score) best = { score, combo };
+      }
+
+      const { lrSample1, lrSample2, tbSample1, tbSample2, lrSamplePercents, tbSamplePercents, lrDiff, tbDiff } = best.combo;
+      const lrRatio = (lrSample1 + lrSample2) / 2;
+      const tbRatio = (tbSample1 + tbSample2) / 2;
+
+      // computeCenteringは絶対値ではなく比率のみを見るため、L/R・T/Bの比をそのまま渡せる
+      const borders = { left: lrRatio, right: 1, top: tbRatio, bottom: 1 };
+      const centering = computeCentering(borders);
+      const gradeInfo = estimateGrade(centering);
+
+      renderCornerResults(centering, gradeInfo, { lrSamplePercents, tbSamplePercents, lrDiff, tbDiff });
+    }
+
+    function renderCornerResults(centering, gradeInfo, sampleInfo) {
+      resultSection.style.display = 'block';
+
+      const thumbHtml = CORNER_NAMES.map(name => {
+        const img = cornerThumbs.children[CORNER_NAMES.indexOf(name)];
+        return `<div><img src="${img ? img.src : ''}" /><div class="thumb-cap">${esc(cornerLabelShort(name))}</div></div>`;
+      }).join('');
+
+      const DIFF_WARN_THRESHOLD = 8; // ポイント差でこれを超えたら注意喚起
+      const lrWarn = sampleInfo.lrDiff > DIFF_WARN_THRESHOLD;
+      const tbWarn = sampleInfo.tbDiff > DIFF_WARN_THRESHOLD;
+
+      resultSection.innerHTML = `
+        <div class="card-box grade-box">
+          <div class="section-label">推定グレード（センタリングのみ・前面基準・4隅方式）</div>
+          <div class="grade-value">${esc(gradeInfo.overall)}</div>
+          <div class="grade-caption">左右 ${esc(gradeInfo.lrGrade)} ／ 上下 ${esc(gradeInfo.tbGrade)}</div>
+        </div>
+
+        <div class="card-box">
+          <div class="section-label">📏 計測結果（2方向の平均）</div>
+
+          <div class="ratio-row">
+            <span class="ratio-label">左右 (Left / Right)</span>
+            <span class="ratio-value">${centering.lrMajor.toFixed(1)} / ${centering.lrMinor.toFixed(1)}</span>
+          </div>
+          <div class="ratio-bar">
+            <div class="fill-a" style="width:${centering.accuracyLR}%"></div>
+            <div class="fill-b" style="width:${100 - centering.accuracyLR}%"></div>
+          </div>
+
+          <div class="ratio-row" style="margin-top:14px;">
+            <span class="ratio-label">上下 (Top / Bottom)</span>
+            <span class="ratio-value">${centering.tbMajor.toFixed(1)} / ${centering.tbMinor.toFixed(1)}</span>
+          </div>
+          <div class="ratio-bar">
+            <div class="fill-a" style="width:${centering.accuracyTB}%"></div>
+            <div class="fill-b" style="width:${100 - centering.accuracyTB}%"></div>
+          </div>
+        </div>
+
+        <div class="card-box">
+          <div class="section-label">🔍 独立2サンプルの内訳（一致度チェック）</div>
+          <div class="ratio-row">
+            <span class="ratio-label">左右：上辺経由 / 下辺経由</span>
+            <span class="ratio-value" style="font-size:0.95rem;${lrWarn ? 'color:#ff7b72;' : ''}">${sampleInfo.lrSamplePercents[0].toFixed(1)}% / ${sampleInfo.lrSamplePercents[1].toFixed(1)}%</span>
+          </div>
+          <div class="ratio-row">
+            <span class="ratio-label">上下：左辺経由 / 右辺経由</span>
+            <span class="ratio-value" style="font-size:0.95rem;${tbWarn ? 'color:#ff7b72;' : ''}">${sampleInfo.tbSamplePercents[0].toFixed(1)}% / ${sampleInfo.tbSamplePercents[1].toFixed(1)}%</span>
+          </div>
+          ${(lrWarn || tbWarn) ? `<div class="error-msg" style="margin-top:10px;">⚠️ 2サンプルの差が大きく、撮影ミス（角度のズレ・辺の隠れ等）の可能性があります。結果は目安としてご覧ください。</div>` : ''}
+        </div>
+
+        <div class="card-box">
+          <div class="section-label">📸 撮影した4隅</div>
+          <div class="thumb-grid">${thumbHtml}</div>
+        </div>
+      `;
+    }
+
+    // ============ 画像解析パイプライン（カード全体モード） ============
+
+    function analyzeImage(imgElement) {
+      const MAX_DIM = 1400;
+      let scale = 1;
+      if (imgElement.width > MAX_DIM || imgElement.height > MAX_DIM) {
+        scale = MAX_DIM / Math.max(imgElement.width, imgElement.height);
+      }
+      const srcCanvas = document.createElement('canvas');
+      srcCanvas.width = Math.round(imgElement.width * scale);
+      srcCanvas.height = Math.round(imgElement.height * scale);
+      srcCanvas.getContext('2d').drawImage(imgElement, 0, 0, srcCanvas.width, srcCanvas.height);
+
+      let src = cv.imread(srcCanvas);
+
+      // --- 2.1 前処理 ---
+      let blurred = new cv.Mat();
+      cv.GaussianBlur(src, blurred, new cv.Size(5, 5), 0);
+      let gray = new cv.Mat();
+      cv.cvtColor(blurred, gray, cv.COLOR_RGBA2GRAY);
+      let binary = new cv.Mat();
+      cv.threshold(gray, binary, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
+
+      // --- 2.2 直線交差法による仮想頂点算出 ---
+      let edges = new cv.Mat();
+      cv.Canny(gray, edges, 50, 150);
+
+      let lines = new cv.Mat();
+      const minLineLen = Math.min(src.cols, src.rows) * 0.25;
+      cv.HoughLinesP(edges, lines, 1, Math.PI / 180, 60, minLineLen, 20);
+
+      const segments = [];
+      for (let i = 0; i < lines.rows; i++) {
+        const x1 = lines.data32S[i * 4], y1 = lines.data32S[i * 4 + 1];
+        const x2 = lines.data32S[i * 4 + 2], y2 = lines.data32S[i * 4 + 3];
+        segments.push({ x1, y1, x2, y2 });
+      }
+
+      if (segments.length < 4) {
+        cleanup([src, blurred, gray, binary, edges, lines]);
+        showError('カードの輪郭を検出できませんでした。背景とのコントラストを上げて、カードが画面いっぱいに水平に写るよう撮り直してください。');
+        return;
+      }
+
+      // 輪郭検出でカードのおおよその位置を先に特定し、その近傍の直線だけを採用する
+      // （背景の柄・シワ等から生じる誤った直線の影響を減らすため）
+      const roi = findCardROI(binary, src.cols * src.rows);
+      const filteredSegments = filterSegmentsByROI(segments, roi);
+
+      const grouped = classifyLines(filteredSegments, src.cols, src.rows);
+      if (!grouped.top || !grouped.bottom || !grouped.left || !grouped.right) {
+        cleanup([src, blurred, gray, binary, edges, lines]);
+        showError('カードの4辺をすべて検出できませんでした。カード全体が枠内に収まるよう撮り直してください。');
+        return;
+      }
+
+      const corners = computeVirtualVertices(grouped);
+      if (!corners) {
+        cleanup([src, blurred, gray, binary, edges, lines]);
+        showError('カードの頂点を計算できませんでした。角度を変えて撮り直してください。');
+        return;
+      }
+
+      // デバッグ表示：検出した4辺と頂点を元画像に描画
+      drawDebugOverlay(srcCanvas, grouped, corners);
+
+      // カードの実寸比率（63mm×88mm ≒ 0.716）から大きく外れる場合は誤検出とみなす
+      // カメラの回転により横向きに検出されるケースがあるため、縦・横どちらの向きでも判定する
+      const detectedW = (dist(corners.topLeft, corners.topRight) + dist(corners.bottomLeft, corners.bottomRight)) / 2;
+      const detectedH = (dist(corners.topLeft, corners.bottomLeft) + dist(corners.topRight, corners.bottomRight)) / 2;
+      const aspect = detectedW / detectedH;
+      const normalizedAspect = aspect > 1 ? 1 / aspect : aspect;
+      if (normalizedAspect < 0.55 || normalizedAspect > 0.85) {
+        cleanup([src, blurred, gray, binary, edges, lines]);
+        showError(`カードの輪郭を正しく検出できませんでした（検出形状の縦横比がカードの実際の比率と大きく異なります）。無地の背景の上に、カード全体が水平にまっすぐ収まるよう撮り直してください。`);
+        return;
+      }
+
+      // --- 3. 射影変換 ---
+      const warped = warpCard(src, corners);
+
+      // --- 4. ボーダー計測とセンタリング計算 ---
+      const borders = measureBorders(warped);
+      const centering = computeCentering(borders);
+      const gradeInfo = estimateGrade(centering);
+
+      renderResults(centering, gradeInfo, warped, borders);
+
+      cleanup([src, blurred, gray, binary, edges, lines, warped]);
+    }
+
+    function cleanup(mats) {
+      mats.forEach(m => { try { m.delete(); } catch (e) {} });
+    }
+
+    // 二値化画像（正・反転の両方）から最大の輪郭を探し、カードらしい縦横比に近い方を採用する
+    function findCardROI(binaryMat, totalArea) {
+      function largestContourRect(mat) {
+        const contours = new cv.MatVector();
+        const hierarchy = new cv.Mat();
+        cv.findContours(mat, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+        let bestRect = null, bestArea = 0;
+        for (let i = 0; i < contours.size(); i++) {
+          const c = contours.get(i);
+          const area = cv.contourArea(c);
+          if (area > bestArea) { bestArea = area; bestRect = cv.boundingRect(c); }
+        }
+        contours.delete(); hierarchy.delete();
+        return bestRect ? { rect: bestRect, area: bestArea } : null;
+      }
+
+      const normal = largestContourRect(binaryMat);
+      const inverted = new cv.Mat();
+      cv.bitwise_not(binaryMat, inverted);
+      const inv = largestContourRect(inverted);
+      inverted.delete();
+
+      const candidates = [normal, inv].filter(c => c && c.area > totalArea * 0.15);
+      if (candidates.length === 0) return null;
+
+      const aspectScore = (c) => {
+        const a = c.rect.width / c.rect.height;
+        const na = a > 1 ? 1 / a : a;
+        return Math.abs(na - 0.716);
+      };
+      candidates.sort((a, b) => aspectScore(a) - aspectScore(b));
+      return candidates[0].rect;
+    }
+
+    // ROI（カードのおおよその領域）近傍にある線分だけに絞り込む。
+    // 十分な数の線分が見つからない場合は元の全線分にフォールバックする。
+    function filterSegmentsByROI(segments, roi) {
+      if (!roi) return segments;
+      const marginX = roi.width * 0.15;
+      const marginY = roi.height * 0.15;
+      const x0 = roi.x - marginX, y0 = roi.y - marginY;
+      const x1 = roi.x + roi.width + marginX, y1 = roi.y + roi.height + marginY;
+
+      const within = segments.filter(s => {
+        const midX = (s.x1 + s.x2) / 2, midY = (s.y1 + s.y2) / 2;
+        return midX >= x0 && midX <= x1 && midY >= y0 && midY <= y1;
+      });
+      return within.length >= 4 ? within : segments;
+    }
+
+    function angleOf(seg) {
+      let a = Math.atan2(seg.y2 - seg.y1, seg.x2 - seg.x1) * 180 / Math.PI;
+      a = ((a % 180) + 180) % 180; // 0-180
+      return a;
+    }
+
+    function segLength(seg) {
+      return Math.hypot(seg.x2 - seg.x1, seg.y2 - seg.y1);
+    }
+
+    // 直線群を上下左右4グループに分類し、各グループの最長線分を代表線とする
+    function classifyLines(segments, width, height) {
+      const horiz = [];
+      const vert = [];
+      const ANGLE_TOL = 20;
+
+      for (const seg of segments) {
+        const a = angleOf(seg);
+        if (a < ANGLE_TOL || a > 180 - ANGLE_TOL) {
+          horiz.push(seg);
+        } else if (Math.abs(a - 90) < ANGLE_TOL) {
+          vert.push(seg);
+        }
+      }
+
+      const midY = (s) => (s.y1 + s.y2) / 2;
+      const midX = (s) => (s.x1 + s.x2) / 2;
+
+      const topCandidates = horiz.filter(s => midY(s) < height / 2);
+      const bottomCandidates = horiz.filter(s => midY(s) >= height / 2);
+      const leftCandidates = vert.filter(s => midX(s) < width / 2);
+      const rightCandidates = vert.filter(s => midX(s) >= width / 2);
+
+      const longest = (arr) => arr.length === 0 ? null : arr.reduce((a, b) => segLength(a) > segLength(b) ? a : b);
+
+      return {
+        top: longest(topCandidates),
+        bottom: longest(bottomCandidates),
+        left: longest(leftCandidates),
+        right: longest(rightCandidates),
+      };
+    }
+
+    function lineIntersection(p1, p2, p3, p4) {
+      const x1 = p1.x, y1 = p1.y, x2 = p2.x, y2 = p2.y;
+      const x3 = p3.x, y3 = p3.y, x4 = p4.x, y4 = p4.y;
+      const denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+      if (Math.abs(denom) < 1e-6) return null;
+      const px = ((x1 * y2 - y1 * x2) * (x3 - x4) - (x1 - x2) * (x3 * y4 - y3 * x4)) / denom;
+      const py = ((x1 * y2 - y1 * x2) * (y3 - y4) - (y1 - y2) * (x3 * y4 - y3 * x4)) / denom;
+      return { x: px, y: py };
+    }
+
+    function computeVirtualVertices(grouped) {
+      const topP1 = { x: grouped.top.x1, y: grouped.top.y1 };
+      const topP2 = { x: grouped.top.x2, y: grouped.top.y2 };
+      const bottomP1 = { x: grouped.bottom.x1, y: grouped.bottom.y1 };
+      const bottomP2 = { x: grouped.bottom.x2, y: grouped.bottom.y2 };
+      const leftP1 = { x: grouped.left.x1, y: grouped.left.y1 };
+      const leftP2 = { x: grouped.left.x2, y: grouped.left.y2 };
+      const rightP1 = { x: grouped.right.x1, y: grouped.right.y1 };
+      const rightP2 = { x: grouped.right.x2, y: grouped.right.y2 };
+
+      const topLeft = lineIntersection(topP1, topP2, leftP1, leftP2);
+      const topRight = lineIntersection(topP1, topP2, rightP1, rightP2);
+      const bottomLeft = lineIntersection(bottomP1, bottomP2, leftP1, leftP2);
+      const bottomRight = lineIntersection(bottomP1, bottomP2, rightP1, rightP2);
+
+      if (!topLeft || !topRight || !bottomLeft || !bottomRight) return null;
+      return { topLeft, topRight, bottomLeft, bottomRight };
+    }
+
+    function drawDebugOverlay(srcCanvas, grouped, corners) {
+      canvasWrap.style.display = 'block';
+      canvas.width = srcCanvas.width;
+      canvas.height = srcCanvas.height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(srcCanvas, 0, 0);
+
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = '#3fb950';
+      ctx.beginPath();
+      ctx.moveTo(corners.topLeft.x, corners.topLeft.y);
+      ctx.lineTo(corners.topRight.x, corners.topRight.y);
+      ctx.lineTo(corners.bottomRight.x, corners.bottomRight.y);
+      ctx.lineTo(corners.bottomLeft.x, corners.bottomLeft.y);
+      ctx.closePath();
+      ctx.stroke();
+
+      ctx.fillStyle = '#f0c040';
+      for (const pt of Object.values(corners)) {
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, 6, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    function dist(p1, p2) { return Math.hypot(p2.x - p1.x, p2.y - p1.y); }
+
+    function warpCard(src, corners, marginRatio = 0) {
+      const { topLeft, topRight, bottomLeft, bottomRight } = corners;
+
+      const widthTop = dist(topLeft, topRight);
+      const widthBottom = dist(bottomLeft, bottomRight);
+      const avgWidth = (widthTop + widthBottom) / 2;
+
+      const heightLeft = dist(topLeft, bottomLeft);
+      const heightRight = dist(topRight, bottomRight);
+      const avgHeight = (heightLeft + heightRight) / 2;
+
+      // カメラの回転でカードが横向きに写っている場合、出力を90度回転して縦向きに正規化する
+      const isLandscape = avgWidth > avgHeight;
+      const outWidth = Math.round(isLandscape ? avgHeight : avgWidth);
+      const outHeight = Math.round(isLandscape ? avgWidth : avgHeight);
+
+      // marginRatio>0の場合、検出した4隅ぴったりではなく周囲に余白を持たせて出力する。
+      // 検出が実際のカード外縁より内側（絵柄の境目など）を誤って掴んだ場合でも、
+      // 手動計測モードで本来の外縁をタップできるようにするための安全マージン。
+      const mW = Math.round(outWidth * marginRatio);
+      const mH = Math.round(outHeight * marginRatio);
+      const finalWidth = outWidth + mW * 2;
+      const finalHeight = outHeight + mH * 2;
+
+      const srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
+        topLeft.x, topLeft.y,
+        topRight.x, topRight.y,
+        bottomRight.x, bottomRight.y,
+        bottomLeft.x, bottomLeft.y,
+      ]);
+      const dstPoints = isLandscape
+        ? [mW, mH, mW, mH + outHeight, mW + outWidth, mH + outHeight, mW + outWidth, mH]
+        : [mW, mH, mW + outWidth, mH, mW + outWidth, mH + outHeight, mW, mH + outHeight];
+      const dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, dstPoints);
+
+      const M = cv.getPerspectiveTransform(srcTri, dstTri);
+      const dst = new cv.Mat();
+      const dsize = new cv.Size(finalWidth, finalHeight);
+      cv.warpPerspective(src, dst, M, dsize, cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar());
+
+      srcTri.delete(); dstTri.delete(); M.delete();
+      return dst;
+    }
+
+    // 勾配マット上で、fromStart側の端から内側へ走査し「立ち上がりが最も急な位置」
+    // （ボーダー→柄の境界）までの距離を返す共通ロジック。
+    // isRow=trueなら行方向(横一列)を固定して列方向に走査、falseなら列を固定して行方向に走査。
+    function scanBorderWidth(gradMat, matCols, isRow, dimSize, otherDimSize, fromStart, maxScan) {
+      const bandStart = Math.round(otherDimSize * 0.3);
+      const bandEnd = Math.round(otherDimSize * 0.7);
+      const skip = Math.max(6, Math.round(dimSize * 0.02));
+
+      function bandAvg(fixedIdx) {
+        let sum = 0, count = 0;
+        for (let j = bandStart; j < bandEnd; j++) {
+          const r = isRow ? fixedIdx : j;
+          const c = isRow ? j : fixedIdx;
+          sum += Math.abs(gradMat.data32F[r * matCols + c]);
+          count++;
+        }
+        return count > 0 ? sum / count : 0;
+      }
+
+      const raw = [];
+      for (let i = skip; i < maxScan; i++) {
+        const idx = fromStart ? i : dimSize - 1 - i;
+        raw.push(bandAvg(idx));
+      }
+      const smoothWindow = 5;
+      const smoothed = raw.map((_, i) => {
+        const lo = Math.max(0, i - smoothWindow), hi = Math.min(raw.length, i + smoothWindow + 1);
+        let s = 0;
+        for (let k = lo; k < hi; k++) s += raw[k];
+        return s / (hi - lo);
+      });
+
+      // 「値の高さ」ではなく「立ち上がりの急峻さ」でボーダー→柄の境界を検出する
+      const stepWindow = 8;
+      let foundOffset = 0;
+      let bestStep = -Infinity;
+      for (let i = stepWindow; i < smoothed.length - stepWindow; i++) {
+        let before = 0, after = 0;
+        for (let k = i - stepWindow; k < i; k++) before += smoothed[k];
+        for (let k = i; k < i + stepWindow; k++) after += smoothed[k];
+        const step = (after - before) / stepWindow;
+        if (step > bestStep) { bestStep = step; foundOffset = i; }
+      }
+
+      if (window.DEBUG_PROFILE) {
+        console.log('PROFILE', isRow ? 'row' : 'col', fromStart, JSON.stringify(smoothed.map(v => Math.round(v))));
+      }
+
+      return skip + foundOffset;
+    }
+
+    function measureBorders(warped) {
+      let gray = new cv.Mat();
+      cv.cvtColor(warped, gray, cv.COLOR_RGBA2GRAY);
+      let gradX = new cv.Mat(), gradY = new cv.Mat();
+      cv.Sobel(gray, gradX, cv.CV_32F, 1, 0, 3);
+      cv.Sobel(gray, gradY, cv.CV_32F, 0, 1, 3);
+
+      const w = gray.cols, h = gray.rows;
+      const maxScanRatio = 0.18; // カード幅の18%までを走査範囲とする
+
+      const left = scanBorderWidth(gradX, w, false, w, h, true, Math.round(w * maxScanRatio));
+      const right = scanBorderWidth(gradX, w, false, w, h, false, Math.round(w * maxScanRatio));
+      const top = scanBorderWidth(gradY, w, true, h, w, true, Math.round(h * maxScanRatio));
+      const bottom = scanBorderWidth(gradY, w, true, h, w, false, Math.round(h * maxScanRatio));
+
+      gray.delete(); gradX.delete(); gradY.delete();
+      if (window.DEBUG_PROFILE) {
+        console.log('DEBUG borders', JSON.stringify({ left, right, top, bottom, width: w, height: h }));
+      }
+      return { left, right, top, bottom, width: w, height: h };
+    }
+
+    function computeCentering(borders) {
+      const { left, right, top, bottom } = borders;
+      const lrTotal = left + right;
+      const tbTotal = top + bottom;
+      const accuracyLR = lrTotal > 0 ? (left / lrTotal) * 100 : 50;
+      const accuracyTB = tbTotal > 0 ? (top / tbTotal) * 100 : 50;
+
+      // 「大きい方/小さい方」形式（例: 58/42）に正規化
+      const lrMajor = Math.max(accuracyLR, 100 - accuracyLR);
+      const lrMinor = 100 - lrMajor;
+      const tbMajor = Math.max(accuracyTB, 100 - accuracyTB);
+      const tbMinor = 100 - tbMajor;
+
+      return {
+        left, right, top, bottom,
+        accuracyLR, accuracyTB,
+        lrMajor, lrMinor, tbMajor, tbMinor,
+      };
+    }
+
+    // PSAグレーディング基準（2025年2月改定版・前面）
+    const PSA_GRADE_TABLE = [
+      { grade: 'PSA 10 (Gem Mint)', major: 55 },
+      { grade: 'PSA 9 (Mint)', major: 60 },
+      { grade: 'PSA 8 (NM-MT)', major: 65 },
+      { grade: 'PSA 7 (NM)', major: 70 },
+      { grade: 'PSA 6 (EX-MT)', major: 80 },
+      { grade: 'PSA 3-5', major: 85 },
+      { grade: 'PSA 1.5-2', major: 90 },
+    ];
+
+    function gradeForMajor(major) {
+      for (const row of PSA_GRADE_TABLE) {
+        if (major <= row.major) return row.grade;
+      }
+      return 'PSA 1未満（対象外）';
+    }
+
+    function estimateGrade(centering) {
+      const worstMajor = Math.max(centering.lrMajor, centering.tbMajor);
+      const lrGrade = gradeForMajor(centering.lrMajor);
+      const tbGrade = gradeForMajor(centering.tbMajor);
+      const overall = gradeForMajor(worstMajor);
+      return { lrGrade, tbGrade, overall, worstMajor };
+    }
+
+    function renderResults(centering, gradeInfo, warpedMat, borders) {
+      setStatus('');
+      resultSection.style.display = 'block';
+
+      const warpedCanvas = document.createElement('canvas');
+      cv.imshow(warpedCanvas, warpedMat);
+      const ctx = warpedCanvas.getContext('2d');
+      ctx.strokeStyle = '#ff2d55';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(borders.left, 0); ctx.lineTo(borders.left, borders.height); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(borders.width - borders.right, 0); ctx.lineTo(borders.width - borders.right, borders.height); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, borders.top); ctx.lineTo(borders.width, borders.top); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, borders.height - borders.bottom); ctx.lineTo(borders.width, borders.height - borders.bottom); ctx.stroke();
+      const warpedDataUrl = warpedCanvas.toDataURL('image/jpeg', 0.85);
+
+      resultSection.innerHTML = `
+        <div class="card-box grade-box">
+          <div class="section-label">推定グレード（センタリングのみ・前面基準）</div>
+          <div class="grade-value">${esc(gradeInfo.overall)}</div>
+          <div class="grade-caption">左右 ${esc(gradeInfo.lrGrade)} ／ 上下 ${esc(gradeInfo.tbGrade)}</div>
+        </div>
+
+        <div class="card-box">
+          <div class="section-label">📏 計測結果</div>
+
+          <div class="ratio-row">
+            <span class="ratio-label">左右 (Left / Right)</span>
+            <span class="ratio-value">${centering.lrMajor.toFixed(1)} / ${centering.lrMinor.toFixed(1)}</span>
+          </div>
+          <div class="ratio-bar">
+            <div class="fill-a" style="width:${centering.accuracyLR}%"></div>
+            <div class="fill-b" style="width:${100 - centering.accuracyLR}%"></div>
+          </div>
+
+          <div class="ratio-row" style="margin-top:14px;">
+            <span class="ratio-label">上下 (Top / Bottom)</span>
+            <span class="ratio-value">${centering.tbMajor.toFixed(1)} / ${centering.tbMinor.toFixed(1)}</span>
+          </div>
+          <div class="ratio-bar">
+            <div class="fill-a" style="width:${centering.accuracyTB}%"></div>
+            <div class="fill-b" style="width:${100 - centering.accuracyTB}%"></div>
+          </div>
+        </div>
+
+        <div class="card-box">
+          <div class="section-label">🔲 正規化画像（射影変換後）</div>
+          <img src="${warpedDataUrl}" style="width:100%;border-radius:8px;" />
+        </div>
+      `;
+    }
+
+    function esc(str) {
+      return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    // ============ 手動計測モード ============
+    // 1枚の全体写真から（可能なら）傾き補正した画像を表示し、ユーザーが各辺の
+    // 「外側の線」「内側の線」をそれぞれ2点タップで指定する。線と線の垂直距離を
+    // その辺のボーダー幅とみなし、既存のcomputeCentering/estimateGradeにそのまま渡す。
+    // 4隅モードのような複数写真の合成・回転推定が不要なため、構造的にシンプルで
+    // 検出ミスの入り込む余地が少ない。
+
+    const MANUAL_STEPS = [
+      { side: 'left',   kind: 'outer', label: '① 左辺の外側の線を2点タップしてください' },
+      { side: 'left',   kind: 'inner', label: '② 左辺の内側（枠と絵柄の境目）の線を2点タップしてください' },
+      { side: 'right',  kind: 'outer', label: '③ 右辺の外側の線を2点タップしてください' },
+      { side: 'right',  kind: 'inner', label: '④ 右辺の内側の線を2点タップしてください' },
+      { side: 'top',    kind: 'outer', label: '⑤ 上辺の外側の線を2点タップしてください' },
+      { side: 'top',    kind: 'inner', label: '⑥ 上辺の内側の線を2点タップしてください' },
+      { side: 'bottom', kind: 'outer', label: '⑦ 下辺の外側の線を2点タップしてください' },
+      { side: 'bottom', kind: 'inner', label: '⑧ 下辺の内側の線を2点タップしてください' },
+    ];
+    const MANUAL_COLORS = { outer: '#f0c040', inner: '#39c5f7', done: '#3fb950' };
+
+    let manualImage = null;       // 表示中のベース画像（HTMLCanvasElement）
+    let manualLines = {};         // { left:{outer:[p,p], inner:[p,p]}, right:{...}, ... }（画像ピクセル座標）
+    let manualStepIdx = 0;
+    let manualCurrentPoints = []; // 現在のステップで打った点（0または1個）
+    let manualZoom = { scale: 1, tx: 0, ty: 0, minScale: 1, maxScale: 8 };
+    let manualPointers = new Map();
+    let manualPinch = null;       // { dist, scale, mid, tx, ty }
+    let manualDrag = null;        // { x, y, tx, ty, moved }
+    let manualTapCandidate = null;
+
+    const manualViewport = document.getElementById('manual-viewport');
+    const manualCanvas = document.getElementById('manual-canvas');
+    const manualCtx = manualCanvas.getContext('2d');
+    const manualInstruction = document.getElementById('manual-instruction');
+    const manualSubstatus = document.getElementById('manual-substatus');
+    const manualProgress = document.getElementById('manual-progress');
+    const manualZoomHint = document.getElementById('manual-zoom-hint');
+    const manualActionBtns = document.getElementById('manual-action-btns');
+    const manualUndoBtn = document.getElementById('manual-undo-btn');
+    const manualResetBtn = document.getElementById('manual-reset-btn');
+    const manualCaptureBtns = document.getElementById('manual-capture-btns');
+
+    manualUndoBtn.addEventListener('click', manualUndo);
+    manualResetBtn.addEventListener('click', () => { resetManualFlow(); setStatus('もう一度撮影してください'); });
+    manualProgress.addEventListener('click', (e) => {
+      const el = e.target.closest('.mstep');
+      if (!el) return;
+      const idx = Number(el.dataset.idx);
+      if (el.classList.contains('done') || el.classList.contains('active')) jumpToManualStep(idx);
+    });
+
+    function resetManualFlow() {
+      manualImage = null;
+      manualLines = {};
+      manualStepIdx = 0;
+      manualCurrentPoints = [];
+      manualViewport.style.display = 'none';
+      manualInstruction.style.display = 'none';
+      manualProgress.style.display = 'none';
+      manualZoomHint.style.display = 'none';
+      manualActionBtns.style.display = 'none';
+      manualCaptureBtns.style.display = 'flex';
+      manualSubstatus.textContent = '';
+      setStatus('カード全体の写真を1枚撮影してください');
+    }
+
+    function startManualCapture(imgElement) {
+      setStatus('画像を解析中...');
+      const MAX_DIM = 1400;
+      let scale = 1;
+      if (imgElement.width > MAX_DIM || imgElement.height > MAX_DIM) {
+        scale = MAX_DIM / Math.max(imgElement.width, imgElement.height);
+      }
+      const srcCanvas = document.createElement('canvas');
+      srcCanvas.width = Math.round(imgElement.width * scale);
+      srcCanvas.height = Math.round(imgElement.height * scale);
+      srcCanvas.getContext('2d').drawImage(imgElement, 0, 0, srcCanvas.width, srcCanvas.height);
+
+      let baseSource = srcCanvas;
+      let usedAutoCorrect = false;
+      const mats = [];
+      const track = (m) => { mats.push(m); return m; };
+
+      try {
+        const src = track(cv.imread(srcCanvas));
+        const blurred = track(new cv.Mat());
+        cv.GaussianBlur(src, blurred, new cv.Size(5, 5), 0);
+        const gray = track(new cv.Mat());
+        cv.cvtColor(blurred, gray, cv.COLOR_RGBA2GRAY);
+        const binary = track(new cv.Mat());
+        cv.threshold(gray, binary, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
+        const edges = track(new cv.Mat());
+        cv.Canny(gray, edges, 50, 150);
+        const lines = track(new cv.Mat());
+        const minLineLen = Math.min(src.cols, src.rows) * 0.25;
+        cv.HoughLinesP(edges, lines, 1, Math.PI / 180, 60, minLineLen, 20);
+
+        const segments = [];
+        for (let i = 0; i < lines.rows; i++) {
+          segments.push({
+            x1: lines.data32S[i * 4], y1: lines.data32S[i * 4 + 1],
+            x2: lines.data32S[i * 4 + 2], y2: lines.data32S[i * 4 + 3],
+          });
+        }
+
+        if (segments.length >= 4) {
+          const roi = findCardROI(binary, src.cols * src.rows);
+          const filtered = filterSegmentsByROI(segments, roi);
+          const grouped = classifyLines(filtered, src.cols, src.rows);
+          if (grouped.top && grouped.bottom && grouped.left && grouped.right) {
+            const corners = computeVirtualVertices(grouped);
+            if (corners) {
+              const detectedW = (dist(corners.topLeft, corners.topRight) + dist(corners.bottomLeft, corners.bottomRight)) / 2;
+              const detectedH = (dist(corners.topLeft, corners.bottomLeft) + dist(corners.topRight, corners.bottomRight)) / 2;
+              const aspect = detectedW / detectedH;
+              const normalizedAspect = aspect > 1 ? 1 / aspect : aspect;
+              if (normalizedAspect >= 0.55 && normalizedAspect <= 0.85) {
+                const warped = track(warpCard(src, corners, 0.15));
+                const outCanvas = document.createElement('canvas');
+                cv.imshow(outCanvas, warped);
+                baseSource = outCanvas;
+                usedAutoCorrect = true;
+              }
+            }
+          }
+        }
+      } catch (e) {
+        console.error('manual auto-correct failed', e);
+      } finally {
+        cleanup(mats);
+      }
+
+      setupManualCanvas(baseSource);
+      manualSubstatus.textContent = usedAutoCorrect
+        ? '✅ 傾きを自動補正しました。ピンチで拡大して各辺の線を指定してください'
+        : '⚠️ 自動補正できなかったため、元の写真のまま採寸します（傾いていても2点タップの直線指定なら問題ありません）';
+      setStatus('');
+    }
+
+    function setupManualCanvas(sourceCanvas) {
+      manualImage = sourceCanvas;
+      manualCanvas.width = sourceCanvas.width;
+      manualCanvas.height = sourceCanvas.height;
+      // CSSのwidth:100%等の影響を受けないよう、表示サイズをビットマップと明示的に一致させる
+      // （タップ座標の変換はこの1:1関係を前提にしている）。
+      manualCanvas.style.width = sourceCanvas.width + 'px';
+      manualCanvas.style.height = sourceCanvas.height + 'px';
+      manualLines = {};
+      manualStepIdx = 0;
+      manualCurrentPoints = [];
+
+      manualCaptureBtns.style.display = 'none';
+      manualViewport.style.display = 'block';
+      manualInstruction.style.display = 'block';
+      manualProgress.style.display = 'flex';
+      manualZoomHint.style.display = 'block';
+      manualActionBtns.style.display = 'flex';
+
+      const rect = manualViewport.getBoundingClientRect();
+      const fitScale = Math.min(rect.width / sourceCanvas.width, rect.height / sourceCanvas.height, 1);
+      manualZoom = {
+        scale: fitScale,
+        tx: (rect.width - sourceCanvas.width * fitScale) / 2,
+        ty: (rect.height - sourceCanvas.height * fitScale) / 2,
+        minScale: fitScale,
+        maxScale: Math.max(fitScale * 10, 6),
+      };
+      applyManualZoom();
+      updateManualProgressUI();
+      redrawManualCanvas();
+    }
+
+    function applyManualZoom() {
+      manualCanvas.style.transform = `translate(${manualZoom.tx}px, ${manualZoom.ty}px) scale(${manualZoom.scale})`;
+    }
+
+    function clampScale(s) { return Math.min(manualZoom.maxScale, Math.max(manualZoom.minScale, s)); }
+
+    function updateManualProgressUI() {
+      const els = manualProgress.querySelectorAll('.mstep');
+      els.forEach((el, i) => {
+        el.classList.toggle('done', i < manualStepIdx);
+        el.classList.toggle('active', i === manualStepIdx);
+      });
+      if (manualStepIdx < MANUAL_STEPS.length) {
+        manualInstruction.textContent = MANUAL_STEPS[manualStepIdx].label;
+      } else {
+        manualInstruction.textContent = '✅ 8点すべて指定完了';
+      }
+    }
+
+    function redrawManualCanvas() {
+      if (!manualImage) return;
+      manualCtx.clearRect(0, 0, manualCanvas.width, manualCanvas.height);
+      manualCtx.drawImage(manualImage, 0, 0);
+
+      const lineWidthPx = Math.max(2, manualCanvas.width * 0.0025);
+      const pointRadius = Math.max(4, manualCanvas.width * 0.006);
+
+      function drawLine(pts, color) {
+        manualCtx.strokeStyle = color;
+        manualCtx.lineWidth = lineWidthPx;
+        manualCtx.beginPath();
+        manualCtx.moveTo(pts[0].x, pts[0].y);
+        manualCtx.lineTo(pts[1].x, pts[1].y);
+        manualCtx.stroke();
+        for (const p of pts) {
+          manualCtx.fillStyle = color;
+          manualCtx.beginPath();
+          manualCtx.arc(p.x, p.y, pointRadius, 0, Math.PI * 2);
+          manualCtx.fill();
+        }
+      }
+
+      for (const side of Object.keys(manualLines)) {
+        const entry = manualLines[side];
+        if (entry.outer) drawLine(entry.outer, MANUAL_COLORS.outer);
+        if (entry.inner) drawLine(entry.inner, MANUAL_COLORS.inner);
+      }
+
+      // 現在のステップで打った1点目（まだ2点揃っていない）
+      if (manualCurrentPoints.length === 1) {
+        const step = MANUAL_STEPS[manualStepIdx];
+        manualCtx.fillStyle = MANUAL_COLORS[step.kind];
+        manualCtx.beginPath();
+        manualCtx.arc(manualCurrentPoints[0].x, manualCurrentPoints[0].y, pointRadius, 0, Math.PI * 2);
+        manualCtx.fill();
+      }
+    }
+
+    function screenToImageCoords(clientX, clientY) {
+      const rect = manualViewport.getBoundingClientRect();
+      const relX = clientX - rect.left, relY = clientY - rect.top;
+      return {
+        x: (relX - manualZoom.tx) / manualZoom.scale,
+        y: (relY - manualZoom.ty) / manualZoom.scale,
+      };
+    }
+
+    manualViewport.addEventListener('pointerdown', (e) => {
+      if (!manualImage) return;
+      e.preventDefault();
+      manualViewport.setPointerCapture(e.pointerId);
+      manualPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (manualPointers.size === 1) {
+        manualDrag = { x: e.clientX, y: e.clientY, tx: manualZoom.tx, ty: manualZoom.ty, moved: false };
+        manualTapCandidate = { x: e.clientX, y: e.clientY, time: Date.now() };
+        manualPinch = null;
+      } else if (manualPointers.size === 2) {
+        const pts = [...manualPointers.values()];
+        manualPinch = {
+          dist: Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y),
+          scale: manualZoom.scale,
+          mid: { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 },
+          tx: manualZoom.tx, ty: manualZoom.ty,
+        };
+        manualDrag = null;
+        manualTapCandidate = null;
+      }
+    });
+
+    manualViewport.addEventListener('pointermove', (e) => {
+      if (!manualImage || !manualPointers.has(e.pointerId)) return;
+      e.preventDefault();
+      manualPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+      if (manualPointers.size === 2 && manualPinch) {
+        const pts = [...manualPointers.values()];
+        const d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+        const mid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+        const newScale = clampScale(manualPinch.scale * (d / manualPinch.dist));
+        const rect = manualViewport.getBoundingClientRect();
+        const anchorRelX = manualPinch.mid.x - rect.left, anchorRelY = manualPinch.mid.y - rect.top;
+        const imgX = (anchorRelX - manualPinch.tx) / manualPinch.scale;
+        const imgY = (anchorRelY - manualPinch.ty) / manualPinch.scale;
+        manualZoom.scale = newScale;
+        manualZoom.tx = anchorRelX - imgX * newScale + (mid.x - manualPinch.mid.x);
+        manualZoom.ty = anchorRelY - imgY * newScale + (mid.y - manualPinch.mid.y);
+        applyManualZoom();
+      } else if (manualPointers.size === 1 && manualDrag) {
+        const dx = e.clientX - manualDrag.x, dy = e.clientY - manualDrag.y;
+        if (Math.hypot(dx, dy) > 8) manualDrag.moved = true;
+        if (manualDrag.moved) {
+          manualZoom.tx = manualDrag.tx + dx;
+          manualZoom.ty = manualDrag.ty + dy;
+          applyManualZoom();
+        }
+      }
+    });
+
+    function manualPointerEnd(e) {
+      if (!manualImage) return;
+      e.preventDefault();
+      if (manualPointers.size === 1 && manualDrag && !manualDrag.moved && manualTapCandidate &&
+          (Date.now() - manualTapCandidate.time) < 800) {
+        const imgPt = screenToImageCoords(manualTapCandidate.x, manualTapCandidate.y);
+        handleManualTap(imgPt);
+      }
+      manualPointers.delete(e.pointerId);
+      if (manualPointers.size < 2) manualPinch = null;
+      if (manualPointers.size === 0) {
+        manualDrag = null;
+        manualTapCandidate = null;
+      } else if (manualPointers.size === 1) {
+        // ピンチ中に指を1本離した場合、残った指でそのままパン/タップを続けられるよう
+        // 現在の位置・現在のズーム状態を基準に再初期化する。
+        const [remaining] = manualPointers.values();
+        manualDrag = { x: remaining.x, y: remaining.y, tx: manualZoom.tx, ty: manualZoom.ty, moved: false };
+        manualTapCandidate = { x: remaining.x, y: remaining.y, time: Date.now() };
+      }
+    }
+    manualViewport.addEventListener('pointerup', manualPointerEnd);
+    manualViewport.addEventListener('pointercancel', manualPointerEnd);
+
+    manualViewport.addEventListener('wheel', (e) => {
+      if (!manualImage) return;
+      e.preventDefault();
+      const rect = manualViewport.getBoundingClientRect();
+      const relX = e.clientX - rect.left, relY = e.clientY - rect.top;
+      const imgX = (relX - manualZoom.tx) / manualZoom.scale, imgY = (relY - manualZoom.ty) / manualZoom.scale;
+      const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+      const newScale = clampScale(manualZoom.scale * factor);
+      manualZoom.tx = relX - imgX * newScale;
+      manualZoom.ty = relY - imgY * newScale;
+      manualZoom.scale = newScale;
+      applyManualZoom();
+    }, { passive: false });
+
+    function handleManualTap(imgPt) {
+      if (manualStepIdx >= MANUAL_STEPS.length) return;
+      // キャンバス範囲外のタップは無視
+      if (imgPt.x < 0 || imgPt.y < 0 || imgPt.x > manualCanvas.width || imgPt.y > manualCanvas.height) return;
+
+      manualCurrentPoints.push(imgPt);
+      if (manualCurrentPoints.length === 2) {
+        const step = MANUAL_STEPS[manualStepIdx];
+        if (!manualLines[step.side]) manualLines[step.side] = {};
+        manualLines[step.side][step.kind] = manualCurrentPoints;
+        manualCurrentPoints = [];
+        manualStepIdx++;
+        updateManualProgressUI();
+        if (manualStepIdx >= MANUAL_STEPS.length) {
+          redrawManualCanvas();
+          finishManualMeasurement();
+          return;
+        }
+      }
+      redrawManualCanvas();
+    }
+
+    function manualUndo() {
+      if (manualStepIdx >= MANUAL_STEPS.length && manualCurrentPoints.length === 0) {
+        // 8点すべて指定し結果表示済みの状態からは、最後の辺をやり直せるよう1つ戻す
+        manualStepIdx = MANUAL_STEPS.length - 1;
+        const step = MANUAL_STEPS[manualStepIdx];
+        if (manualLines[step.side]) delete manualLines[step.side][step.kind];
+        resultSection.style.display = 'none';
+      } else if (manualCurrentPoints.length > 0) {
+        manualCurrentPoints.pop();
+      } else if (manualStepIdx > 0) {
+        manualStepIdx--;
+        const step = MANUAL_STEPS[manualStepIdx];
+        if (manualLines[step.side]) delete manualLines[step.side][step.kind];
+      }
+      updateManualProgressUI();
+      redrawManualCanvas();
+    }
+
+    // 進捗バッジ（①②③...）をタップすると、その辺のやり直しまで一気に戻れる。
+    // それ以降（後の辺）の指定済みデータもあわせて破棄する。
+    function jumpToManualStep(idx) {
+      if (idx < 0 || idx > manualStepIdx) return;
+      const lastIdx = Math.min(manualStepIdx, MANUAL_STEPS.length - 1);
+      for (let i = idx; i <= lastIdx; i++) {
+        const step = MANUAL_STEPS[i];
+        if (manualLines[step.side]) delete manualLines[step.side][step.kind];
+      }
+      manualStepIdx = idx;
+      manualCurrentPoints = [];
+      resultSection.style.display = 'none';
+      updateManualProgressUI();
+      redrawManualCanvas();
+    }
+
+    function pointLineDistance(pt, lp1, lp2) {
+      const dx = lp2.x - lp1.x, dy = lp2.y - lp1.y;
+      const len = Math.hypot(dx, dy);
+      if (len < 1e-6) return Math.hypot(pt.x - lp1.x, pt.y - lp1.y);
+      const cross = Math.abs(dx * (lp1.y - pt.y) - dy * (lp1.x - pt.x));
+      return cross / len;
+    }
+
+    function lineToLineDistance(outer, inner) {
+      const d1 = pointLineDistance(inner[0], outer[0], outer[1]);
+      const d2 = pointLineDistance(inner[1], outer[0], outer[1]);
+      return (d1 + d2) / 2;
+    }
+
+    function finishManualMeasurement() {
+      const left = lineToLineDistance(manualLines.left.outer, manualLines.left.inner);
+      const right = lineToLineDistance(manualLines.right.outer, manualLines.right.inner);
+      const top = lineToLineDistance(manualLines.top.outer, manualLines.top.inner);
+      const bottom = lineToLineDistance(manualLines.bottom.outer, manualLines.bottom.inner);
+
+      const centering = computeCentering({ left, right, top, bottom });
+      const gradeInfo = estimateGrade(centering);
+      renderManualResults(centering, gradeInfo);
+    }
+
+    function renderManualResults(centering, gradeInfo) {
+      setStatus('');
+      resultSection.style.display = 'block';
+      const markedDataUrl = manualCanvas.toDataURL('image/jpeg', 0.85);
+
+      resultSection.innerHTML = `
+        <div class="card-box grade-box">
+          <div class="section-label">推定グレード（センタリングのみ・前面基準・手動計測）</div>
+          <div class="grade-value">${esc(gradeInfo.overall)}</div>
+          <div class="grade-caption">左右 ${esc(gradeInfo.lrGrade)} ／ 上下 ${esc(gradeInfo.tbGrade)}</div>
+        </div>
+
+        <div class="card-box">
+          <div class="section-label">📏 計測結果</div>
+
+          <div class="ratio-row">
+            <span class="ratio-label">左右 (Left / Right)</span>
+            <span class="ratio-value">${centering.lrMajor.toFixed(1)} / ${centering.lrMinor.toFixed(1)}</span>
+          </div>
+          <div class="ratio-bar">
+            <div class="fill-a" style="width:${centering.accuracyLR}%"></div>
+            <div class="fill-b" style="width:${100 - centering.accuracyLR}%"></div>
+          </div>
+
+          <div class="ratio-row" style="margin-top:14px;">
+            <span class="ratio-label">上下 (Top / Bottom)</span>
+            <span class="ratio-value">${centering.tbMajor.toFixed(1)} / ${centering.tbMinor.toFixed(1)}</span>
+          </div>
+          <div class="ratio-bar">
+            <div class="fill-a" style="width:${centering.accuracyTB}%"></div>
+            <div class="fill-b" style="width:${100 - centering.accuracyTB}%"></div>
+          </div>
+        </div>
+
+        <div class="card-box">
+          <div class="section-label">✏️ 指定した線</div>
+          <img src="${markedDataUrl}" style="width:100%;border-radius:8px;" />
+        </div>
+      `;
+    }
+  </script>
+</body>
+</html>
