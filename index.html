@@ -199,7 +199,7 @@
       </div>
 
       <div id="manual-viewport"><canvas id="manual-canvas"></canvas></div>
-      <div class="manual-zoom-hint" id="manual-zoom-hint" style="display:none;">🔍 ピンチで拡大／指1本タップ後そのままドラッグで点を微調整／画像の移動はダブルタップ+スワイプ</div>
+      <div class="manual-zoom-hint" id="manual-zoom-hint" style="display:none;">🔍 指1本：タップ後そのままドラッグで点を微調整／指2本：ドラッグで画像移動、つまんで拡大縮小</div>
 
       <div class="manual-btn-row" id="manual-action-btns" style="display:none;">
         <button class="btn btn-reset" id="manual-undo-btn">↩️ 1点戻す</button>
@@ -1201,13 +1201,9 @@
     let manualZoom = { scale: 1, tx: 0, ty: 0, minScale: 1, maxScale: 8 };
     let manualPointers = new Map();
     let manualPinch = null;       // { dist, scale, mid, tx, ty }
-    // 指1本の操作は既定で「点の配置・微調整」。画像の移動はダブルタップ＋スワイプのみで行う。
-    let manualGestureMode = null; // 'point' | 'pan' | 'pinch' | null
+    // 指1本＝点の配置・微調整、指2本＝画像の移動／拡大縮小（ピンチ）。
+    let manualGestureMode = null; // 'point' | 'pinch' | null
     let manualPointDrag = null;   // { pointerId, previewImgPt }
-    let manualPanDrag = null;     // { x, y, tx, ty }
-    let manualLastTapUp = null;   // { x, y, time }（ダブルタップ判定用）
-    const DOUBLE_TAP_MS = 350;
-    const DOUBLE_TAP_DIST = 30;
 
     const manualViewport = document.getElementById('manual-viewport');
     const manualCanvas = document.getElementById('manual-canvas');
@@ -1231,14 +1227,12 @@
     });
 
     function resetManualFlow() {
-      if (manualPendingTapTimer) { clearTimeout(manualPendingTapTimer); manualPendingTapTimer = null; }
       manualImage = null;
       manualLines = {};
       manualStepIdx = 0;
       manualCurrentPoints = [];
       manualGestureMode = null;
       manualPointDrag = null;
-      manualPanDrag = null;
       manualPointers = new Map();
       manualViewport.style.display = 'none';
       manualInstruction.style.display = 'none';
@@ -1438,76 +1432,45 @@
       };
     }
 
-    function isDoubleTapStart(clientX, clientY) {
-      return !!manualLastTapUp &&
-        (Date.now() - manualLastTapUp.time) < DOUBLE_TAP_MS &&
-        Math.hypot(clientX - manualLastTapUp.x, clientY - manualLastTapUp.y) < DOUBLE_TAP_DIST;
-    }
-
-    // 指先が隠す分、選択位置は少し上（画面上で約1cm）にオフセットして見えるようにする。
-    // デバイスのDPIに依存せず正確にpx換算するため、実際に1cm幅の要素を描画して測る。
-    function measurePxPerCm() {
+    // 指先が隠す分、選択位置は少し上（画面上で約2cm）にオフセットして見えるようにする。
+    // デバイスのDPIに依存せず正確にpx換算するため、実際に2cm幅の要素を描画して測る。
+    function measurePxPerCm(cm) {
       const el = document.createElement('div');
-      el.style.cssText = 'width:1cm;height:1cm;position:absolute;visibility:hidden;pointer-events:none;';
+      el.style.cssText = `width:${cm}cm;height:${cm}cm;position:absolute;visibility:hidden;pointer-events:none;`;
       document.body.appendChild(el);
-      const px = el.getBoundingClientRect().width || 37.8;
+      const px = el.getBoundingClientRect().width || cm * 37.8;
       document.body.removeChild(el);
       return px;
     }
-    const MANUAL_TAP_OFFSET_PX = measurePxPerCm();
+    const MANUAL_TAP_OFFSET_PX = measurePxPerCm(2);
 
     function tapPreviewImgPt(clientX, clientY) {
-      return screenToImageCoords(clientX, clientY - MANUAL_TAP_OFFSET_PX);
+      const p = screenToImageCoords(clientX, clientY - MANUAL_TAP_OFFSET_PX);
+      return {
+        x: Math.min(Math.max(p.x, 0), manualCanvas.width),
+        y: Math.min(Math.max(p.y, 0), manualCanvas.height),
+      };
     }
 
     function startPointGesture(pointerId, clientX, clientY) {
       manualGestureMode = 'point';
       manualPointDrag = { pointerId, previewImgPt: tapPreviewImgPt(clientX, clientY) };
-      manualPanDrag = null;
       redrawManualCanvas();
     }
 
-    // 指を離した瞬間には即確定させず、ダブルタップ（2回目のタップ）が来た場合に備えて
-    // 少し待ってから確定する。こうすることで「移動用のダブルタップ」の1回目が
-    // 誤って点として確定されてしまうのを防ぐ。
-    let manualPendingTapTimer = null;
-
-    function commitPendingTap() {
-      if (manualPendingTapTimer) { clearTimeout(manualPendingTapTimer); manualPendingTapTimer = null; }
-      if (manualGestureMode === 'pendingTap' && manualPointDrag) {
-        handleManualTap(manualPointDrag.previewImgPt);
-      }
-      manualPointDrag = null;
-      manualGestureMode = null;
-    }
-
-    function cancelPendingTap() {
-      if (manualPendingTapTimer) { clearTimeout(manualPendingTapTimer); manualPendingTapTimer = null; }
-      manualPointDrag = null;
-      if (manualGestureMode === 'pendingTap') manualGestureMode = null;
-    }
-
+    // 指1本＝点の配置・微調整、指2本＝画像の移動／拡大縮小（ピンチ）。
+    // 「2本指でつまむ・動かす」という単純な区別にすることで、ダブルタップの
+    // タイミング判定に頼らず確実に見分けられるようにしている。
     manualViewport.addEventListener('pointerdown', (e) => {
       if (!manualImage) return;
       e.preventDefault();
-      manualViewport.setPointerCapture(e.pointerId);
+      try { manualViewport.setPointerCapture(e.pointerId); } catch (err) {}
       manualPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
       if (manualPointers.size === 1) {
-        if (isDoubleTapStart(e.clientX, e.clientY)) {
-          // ダブルタップの2回目：1回目のタップはまだ確定していないので破棄し、画像移動（パン）に切り替える
-          cancelPendingTap();
-          manualGestureMode = 'pan';
-          manualPanDrag = { x: e.clientX, y: e.clientY, tx: manualZoom.tx, ty: manualZoom.ty };
-          manualLastTapUp = null;
-        } else {
-          // ダブルタップ待ちだった前回のタップは、今回が別物と分かった時点で確定させる
-          if (manualGestureMode === 'pendingTap') commitPendingTap();
-          startPointGesture(e.pointerId, e.clientX, e.clientY);
-        }
+        startPointGesture(e.pointerId, e.clientX, e.clientY);
         manualPinch = null;
       } else if (manualPointers.size === 2) {
-        if (manualGestureMode === 'pendingTap') commitPendingTap();
         const pts = [...manualPointers.values()];
         manualPinch = {
           dist: Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y),
@@ -1517,7 +1480,6 @@
         };
         manualGestureMode = 'pinch';
         manualPointDrag = null;
-        manualPanDrag = null;
       }
     });
 
@@ -1539,10 +1501,6 @@
         manualZoom.tx = anchorRelX - imgX * newScale + (mid.x - manualPinch.mid.x);
         manualZoom.ty = anchorRelY - imgY * newScale + (mid.y - manualPinch.mid.y);
         applyManualZoom();
-      } else if (manualGestureMode === 'pan' && manualPanDrag) {
-        manualZoom.tx = manualPanDrag.tx + (e.clientX - manualPanDrag.x);
-        manualZoom.ty = manualPanDrag.ty + (e.clientY - manualPanDrag.y);
-        applyManualZoom();
       } else if (manualGestureMode === 'point' && manualPointDrag && e.pointerId === manualPointDrag.pointerId) {
         // 画像は動かさず、タップ位置（点）だけを指の少し上に追従させて微調整する
         manualPointDrag.previewImgPt = tapPreviewImgPt(e.clientX, e.clientY);
@@ -1555,27 +1513,20 @@
       e.preventDefault();
 
       if (manualGestureMode === 'point' && manualPointDrag && e.pointerId === manualPointDrag.pointerId) {
-        // 即確定させず、ダブルタップ待ちの猶予を置く（プレビュー点はredrawManualCanvasで表示され続ける）
-        manualGestureMode = 'pendingTap';
-        manualLastTapUp = { x: e.clientX, y: e.clientY, time: Date.now() };
-        manualPendingTapTimer = setTimeout(commitPendingTap, DOUBLE_TAP_MS + 30);
-        redrawManualCanvas();
+        handleManualTap(manualPointDrag.previewImgPt);
+        manualPointDrag = null;
       }
 
       manualPointers.delete(e.pointerId);
-      if (manualPointers.size < 2) manualPinch = null;
+      manualPinch = null;
+      // 2本指ジェスチャーの終わりは指が完全に同時に離れるとは限らない。
+      // 残り1本になった時点で即座に「点の配置」を再開してしまうと、その指が
+      // 直後に離れた際に意図しない点が確定してしまうため、ここでは何もしない
+      // （点を打ちたい場合は指を一度離してから改めてタップしてもらう）。
       if (manualPointers.size === 0) {
-        if (manualGestureMode === 'pan' || manualGestureMode === 'pinch') {
-          manualGestureMode = null;
-        }
-        manualPanDrag = null;
-        redrawManualCanvas();
-      } else if (manualPointers.size === 1) {
-        // ピンチ中に指を1本離した場合、残った指はそのまま点の微調整として続行する
-        if (manualGestureMode === 'pendingTap') commitPendingTap();
-        const [[remainingId, remainingPos]] = manualPointers.entries();
-        startPointGesture(remainingId, remainingPos.x, remainingPos.y);
+        manualGestureMode = null;
       }
+      redrawManualCanvas();
     }
     manualViewport.addEventListener('pointerup', manualPointerEnd);
     manualViewport.addEventListener('pointercancel', manualPointerEnd);
@@ -1596,10 +1547,14 @@
 
     function handleManualTap(imgPt) {
       if (manualStepIdx >= MANUAL_STEPS.length) return;
-      // キャンバス範囲外のタップは無視
-      if (imgPt.x < 0 || imgPt.y < 0 || imgPt.x > manualCanvas.width || imgPt.y > manualCanvas.height) return;
+      // 指ずらし分のオフセットで画像端の外に出た場合は、無視せず端に留めて採用する
+      // （そうしないと上端付近の辺を選ぼうとしたタップがすべて無効になってしまう）。
+      const clamped = {
+        x: Math.min(Math.max(imgPt.x, 0), manualCanvas.width),
+        y: Math.min(Math.max(imgPt.y, 0), manualCanvas.height),
+      };
 
-      manualCurrentPoints.push(imgPt);
+      manualCurrentPoints.push(clamped);
       if (manualCurrentPoints.length === 2) {
         const step = MANUAL_STEPS[manualStepIdx];
         if (!manualLines[step.side]) manualLines[step.side] = {};
@@ -1616,19 +1571,28 @@
       redrawManualCanvas();
     }
 
+    // 直前に確定した2点のうち、後の1点だけを取り消して1点目は残す（1点ずつ戻る）
+    function revertLastPointOfStep(idx) {
+      const step = MANUAL_STEPS[idx];
+      const pts = manualLines[step.side] && manualLines[step.side][step.kind];
+      if (pts && pts.length === 2) {
+        manualCurrentPoints = [pts[0]];
+        delete manualLines[step.side][step.kind];
+        manualStepIdx = idx;
+      }
+    }
+
     function manualUndo() {
       if (manualStepIdx >= MANUAL_STEPS.length && manualCurrentPoints.length === 0) {
-        // 8点すべて指定し結果表示済みの状態からは、最後の辺をやり直せるよう1つ戻す
-        manualStepIdx = MANUAL_STEPS.length - 1;
-        const step = MANUAL_STEPS[manualStepIdx];
-        if (manualLines[step.side]) delete manualLines[step.side][step.kind];
+        // 8点すべて指定し結果表示済みの状態から、最後の辺の2点目だけを取り消す
         resultSection.style.display = 'none';
+        revertLastPointOfStep(MANUAL_STEPS.length - 1);
       } else if (manualCurrentPoints.length > 0) {
+        // 現在のステップでまだ1点目だけ（2点目未確定）→ その1点を取り消す
         manualCurrentPoints.pop();
       } else if (manualStepIdx > 0) {
-        manualStepIdx--;
-        const step = MANUAL_STEPS[manualStepIdx];
-        if (manualLines[step.side]) delete manualLines[step.side][step.kind];
+        // 直前のステップは2点とも確定済み → 2点目だけ取り消し、1点目は残す
+        revertLastPointOfStep(manualStepIdx - 1);
       }
       updateManualProgressUI();
       redrawManualCanvas();
