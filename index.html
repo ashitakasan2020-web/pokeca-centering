@@ -1548,6 +1548,7 @@
       manualRotateBtn.style.display = 'none';
       manualCaptureBtns.style.display = 'flex';
       manualSubstatus.textContent = '';
+      canvasWrap.style.display = 'none';
       setStatus('カード全体の写真を1枚撮影してください');
     }
 
@@ -1600,7 +1601,7 @@
         const warped = track(warpCard(src, detection.corners, 0.15));
         const outCanvas = document.createElement('canvas');
         cv.imshow(outCanvas, warped);
-        return outCanvas;
+        return { outCanvas, corners: detection.corners, srcCanvas };
       } catch (e) {
         console.error('manual auto-correct candidate failed', e);
         return null;
@@ -1628,18 +1629,26 @@
       let usedAutoCorrect = false;
       for (const candidate of candidates) {
         const result = tryDetectAndWarpForManual(candidate);
-        if (result) { baseSource = result; usedAutoCorrect = true; break; }
+        if (result) {
+          baseSource = result.outCanvas;
+          usedAutoCorrect = true;
+          // デバッグ表示：どの4頂点を検出したかを、補正前の写真に重ねて表示する
+          // （検出がズレている場合に原因を確認しやすくするため）。
+          drawDebugOverlay(result.srcCanvas, result.corners);
+          break;
+        }
       }
 
       if (!baseSource) {
         // 自動検出できなかった場合でも、写真全体が横長（＝カメラが横向き）なら
         // 縦向きに回転してから表示する（採寸自体は傾いたままでも2点タップなので支障はない）。
         baseSource = baseCanvas.width > baseCanvas.height ? rotateCanvas90(baseCanvas, 1) : baseCanvas;
+        canvasWrap.style.display = 'none';
       }
 
       setupManualCanvas(baseSource);
       manualSubstatus.textContent = usedAutoCorrect
-        ? '✅ 傾きを自動補正しました。ピンチで拡大して各辺の線を指定してください'
+        ? '✅ 傾きを自動補正しました（上の画像は検出した輪郭の確認用）。ピンチで拡大して各辺の線を指定してください'
         : '⚠️ 自動補正できなかったため、向きの補正のみ行った状態で採寸します（傾いていても2点タップの直線指定なら問題ありません）';
       setStatus('');
     }
