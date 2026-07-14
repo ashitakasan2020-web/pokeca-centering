@@ -106,6 +106,13 @@
     font-size: 0.68rem; color: #8b949e; text-align: center; margin-top: 10px; line-height: 1.5;
   }
 
+  .drive-input {
+    width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #30363d; background: #0d1117;
+    color: #e6edf3; font-size: 0.85rem; margin-bottom: 8px;
+  }
+  .drive-input::placeholder { color: #6e7681; }
+  .drive-save-status { font-size: 0.72rem; color: #8b949e; text-align: center; margin-top: 8px; min-height: 16px; }
+
   .manual-instruction {
     text-align: center; font-size: 0.88rem; font-weight: 700; color: #f0c040; margin-bottom: 4px;
   }
@@ -224,6 +231,7 @@
   </div>
 
   <script async src="opencv.js" onload="onOpenCvLoaded()"></script>
+  <script async src="https://accounts.google.com/gsi/client"></script>
   <script>
     let cvReady = false;
     function onOpenCvLoaded() {
@@ -1168,11 +1176,152 @@
           <div class="section-label">🔲 正規化画像（射影変換後）</div>
           <img src="${warpedDataUrl}" style="width:100%;border-radius:8px;" />
         </div>
+
+        ${driveSaveUIHtml()}
       `;
+      wireDriveSaveButton(warpedDataUrl);
     }
 
     function esc(str) {
       return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    // ============ Googleドライブへの保存 ============
+    // 判定結果の画像を「今後の自動判定の学習データ」として、ユーザー自身のGoogleドライブに
+    // 個別ファイルとして保存する。バックエンドを持たない静的サイトのため、サービスアカウントは
+    // 使えず（秘密鍵がブラウザ上に露出してしまう）、Google Identity Servicesによる
+    // ブラウザ向けOAuth（ユーザー本人がその場でログイン・許可）を用いる。
+    // スコープはdrive.file（このアプリ自身が作成したファイルのみアクセス可）に限定し、
+    // ユーザーのドライブ全体を見られないようにしている。
+    const GOOGLE_CLIENT_ID = 'YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com'; // TODO: Cloud ConsoleでWebアプリ用に作成したクライアントIDに置き換える
+    const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
+    const DRIVE_FOLDER_NAME = 'ポケカセンタリング判定';
+
+    let driveTokenClient = null;
+    let driveAccessToken = null;
+    let driveTokenExpiry = 0;
+    let driveFolderIdCache = null;
+
+    function getDriveAccessToken() {
+      return new Promise((resolve, reject) => {
+        if (GOOGLE_CLIENT_ID.startsWith('YOUR_')) {
+          reject(new Error('Google Client IDが未設定です（index.html内のGOOGLE_CLIENT_IDを設定してください）'));
+          return;
+        }
+        if (driveAccessToken && Date.now() < driveTokenExpiry) {
+          resolve(driveAccessToken);
+          return;
+        }
+        if (typeof google === 'undefined' || !google.accounts || !google.accounts.oauth2) {
+          reject(new Error('Googleログイン機能の読み込みが完了していません。少し待って再試行してください'));
+          return;
+        }
+        if (!driveTokenClient) {
+          driveTokenClient = google.accounts.oauth2.initTokenClient({
+            client_id: GOOGLE_CLIENT_ID,
+            scope: DRIVE_SCOPE,
+            callback: () => {},
+          });
+        }
+        driveTokenClient.callback = (resp) => {
+          if (resp.error) { reject(new Error(resp.error)); return; }
+          driveAccessToken = resp.access_token;
+          driveTokenExpiry = Date.now() + (resp.expires_in - 60) * 1000;
+          resolve(driveAccessToken);
+        };
+        driveTokenClient.requestAccessToken({ prompt: driveAccessToken ? '' : 'consent' });
+      });
+    }
+
+    async function ensureDriveFolder(token) {
+      if (driveFolderIdCache) return driveFolderIdCache;
+      const q = encodeURIComponent(`name='${DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`);
+      const listRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!listRes.ok) throw new Error(`Drive検索エラー ${listRes.status}`);
+      const listJson = await listRes.json();
+      if (listJson.files && listJson.files.length > 0) {
+        driveFolderIdCache = listJson.files[0].id;
+        return driveFolderIdCache;
+      }
+      const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: DRIVE_FOLDER_NAME, mimeType: 'application/vnd.google-apps.folder' }),
+      });
+      if (!createRes.ok) throw new Error(`Driveフォルダ作成エラー ${createRes.status}`);
+      const createJson = await createRes.json();
+      driveFolderIdCache = createJson.id;
+      return driveFolderIdCache;
+    }
+
+    async function uploadImageToDrive(token, folderId, filename, dataUrl) {
+      const blob = await (await fetch(dataUrl)).blob();
+      const metadata = { name: filename, parents: [folderId] };
+      const form = new FormData();
+      form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+      form.append('file', blob);
+      const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: form,
+      });
+      if (!res.ok) throw new Error(`Driveアップロードエラー ${res.status}`);
+      return res.json();
+    }
+
+    function sanitizeFilenamePart(s) {
+      return s.replace(/[\\/:*?"<>|]/g, '').trim();
+    }
+
+    function buildDriveFilename(cardName, manageId) {
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+      const parts = [ts];
+      if (cardName) parts.push(sanitizeFilenamePart(cardName));
+      if (manageId) parts.push(sanitizeFilenamePart(manageId));
+      return parts.join('_') + '.jpg';
+    }
+
+    function driveSaveUIHtml() {
+      return `
+        <div class="card-box">
+          <div class="section-label">💾 学習データとしてGoogleドライブに保存</div>
+          <input type="text" id="drive-card-name" class="drive-input" placeholder="カード名（任意）" />
+          <input type="text" id="drive-manage-id" class="drive-input" placeholder="管理番号（任意・トレトク/PSA管理IDなど）" />
+          <button class="btn btn-camera" id="drive-save-btn" style="width:100%;">💾 Googleドライブに保存</button>
+          <div class="drive-save-status" id="drive-save-status"></div>
+        </div>
+      `;
+    }
+
+    function wireDriveSaveButton(imageDataUrl) {
+      const btn = document.getElementById('drive-save-btn');
+      if (!btn) return;
+      btn.addEventListener('click', () => saveResultImageToDrive(imageDataUrl));
+    }
+
+    async function saveResultImageToDrive(imageDataUrl) {
+      const statusEl = document.getElementById('drive-save-status');
+      const btn = document.getElementById('drive-save-btn');
+      const cardName = (document.getElementById('drive-card-name').value || '').trim();
+      const manageId = (document.getElementById('drive-manage-id').value || '').trim();
+      btn.disabled = true;
+      statusEl.textContent = '保存中...';
+      try {
+        const token = await getDriveAccessToken();
+        const folderId = await ensureDriveFolder(token);
+        const filename = buildDriveFilename(cardName, manageId);
+        await uploadImageToDrive(token, folderId, filename, imageDataUrl);
+        statusEl.textContent = `✅ 保存しました（${DRIVE_FOLDER_NAME} フォルダ）`;
+      } catch (e) {
+        console.error(e);
+        statusEl.textContent = '⚠️ 保存に失敗しました: ' + e.message;
+      } finally {
+        btn.disabled = false;
+      }
     }
 
     // ============ 手動計測モード ============
@@ -1677,7 +1826,10 @@
           <div class="section-label">✏️ 指定した線</div>
           <img src="${markedDataUrl}" style="width:100%;border-radius:8px;" />
         </div>
+
+        ${driveSaveUIHtml()}
       `;
+      wireDriveSaveButton(markedDataUrl);
     }
   </script>
 </body>
