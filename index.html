@@ -745,7 +745,7 @@
       let binary = new cv.Mat();
       cv.threshold(gray, binary, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
 
-      // --- 2.2 直線交差法による仮想頂点算出 ---
+      // --- 2.2 4頂点の検出（輪郭近似を優先、斜め撮影・回転に弱い直線分類方式はフォールバック） ---
       let edges = new cv.Mat();
       cv.Canny(gray, edges, 50, 150);
 
@@ -760,43 +760,22 @@
         segments.push({ x1, y1, x2, y2 });
       }
 
-      if (segments.length < 4) {
+      const detection = detectCardCorners(src, gray, binary, segments);
+      if (!detection) {
         cleanup([src, blurred, gray, binary, edges, lines]);
-        showError('カードの輪郭を検出できませんでした。背景とのコントラストを上げて、カードが画面いっぱいに水平に写るよう撮り直してください。');
+        showError('カードの輪郭を検出できませんでした。背景とのコントラストを上げて、カード全体が枠内に収まるよう撮り直してください。');
         return;
       }
+      const corners = detection.corners;
 
-      // 輪郭検出でカードのおおよその位置を先に特定し、その近傍の直線だけを採用する
-      // （背景の柄・シワ等から生じる誤った直線の影響を減らすため）
-      const roi = findCardROI(binary, src.cols * src.rows);
-      const filteredSegments = filterSegmentsByROI(segments, roi);
-
-      const grouped = classifyLines(filteredSegments, src.cols, src.rows);
-      if (!grouped.top || !grouped.bottom || !grouped.left || !grouped.right) {
-        cleanup([src, blurred, gray, binary, edges, lines]);
-        showError('カードの4辺をすべて検出できませんでした。カード全体が枠内に収まるよう撮り直してください。');
-        return;
-      }
-
-      const corners = computeVirtualVertices(grouped);
-      if (!corners) {
-        cleanup([src, blurred, gray, binary, edges, lines]);
-        showError('カードの頂点を計算できませんでした。角度を変えて撮り直してください。');
-        return;
-      }
-
-      // デバッグ表示：検出した4辺と頂点を元画像に描画
-      drawDebugOverlay(srcCanvas, grouped, corners);
+      // デバッグ表示：検出した頂点・外形を元画像に描画
+      drawDebugOverlay(srcCanvas, corners);
 
       // カードの実寸比率（63mm×88mm ≒ 0.716）から大きく外れる場合は誤検出とみなす
       // カメラの回転により横向きに検出されるケースがあるため、縦・横どちらの向きでも判定する
-      const detectedW = (dist(corners.topLeft, corners.topRight) + dist(corners.bottomLeft, corners.bottomRight)) / 2;
-      const detectedH = (dist(corners.topLeft, corners.bottomLeft) + dist(corners.topRight, corners.bottomRight)) / 2;
-      const aspect = detectedW / detectedH;
-      const normalizedAspect = aspect > 1 ? 1 / aspect : aspect;
-      if (normalizedAspect < 0.55 || normalizedAspect > 0.85) {
+      if (!isPlausibleCardAspect(corners)) {
         cleanup([src, blurred, gray, binary, edges, lines]);
-        showError(`カードの輪郭を正しく検出できませんでした（検出形状の縦横比がカードの実際の比率と大きく異なります）。無地の背景の上に、カード全体が水平にまっすぐ収まるよう撮り直してください。`);
+        showError(`カードの輪郭を正しく検出できませんでした（検出形状の縦横比がカードの実際の比率と大きく異なります）。無地の背景の上に、カード全体がまっすぐ収まるよう撮り直してください。`);
         return;
       }
 
@@ -815,6 +794,175 @@
 
     function cleanup(mats) {
       mats.forEach(m => { try { m.delete(); } catch (e) {} });
+    }
+
+    // 輪郭検出＋多角形近似によるカード4頂点検出。
+    // 直線を上下左右に分類して交点を求める方式（classifyLines/computeVirtualVertices）は、
+    // カードが斜め方向から撮影されて大きく傾いている場合、辺の角度が水平・垂直の
+    // 判定しきい値からずれてしまい分類に失敗しやすい。輪郭を1つの閉じた形として捉え
+    // approxPolyDPで4頂点に近似するこの方式は、そうした斜め撮影・回転に対して頑健。
+    // 二値化/エッジ画像から4頂点に近似できる輪郭候補を「すべて」列挙する（面積の大きい順）。
+    // 最大面積の輪郭が必ずしもカード自身とは限らない（背景とカードが同じ明度クラスに
+    // まとまってしまい、画面全体に近い塊が最大輪郭になるケースがある）ため、
+    // 1つに絞らず複数候補を返し、呼び出し側でアスペクト比により妥当なものを選ばせる。
+    function findQuadContourCandidates(binaryMat, totalArea) {
+      const contours = new cv.MatVector();
+      const hierarchy = new cv.Mat();
+      cv.findContours(binaryMat, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+      const candidates = [];
+      const epsilons = [0.01, 0.02, 0.03, 0.04, 0.05];
+
+      for (let i = 0; i < contours.size(); i++) {
+        const c = contours.get(i);
+        const area = cv.contourArea(c);
+        if (area > totalArea * 0.1) {
+          const peri = cv.arcLength(c, true);
+          for (const eps of epsilons) {
+            const approx = new cv.Mat();
+            cv.approxPolyDP(c, approx, eps * peri, true);
+            if (approx.rows === 4) {
+              const pts = [];
+              for (let k = 0; k < 4; k++) {
+                pts.push({ x: approx.data32S[k * 2], y: approx.data32S[k * 2 + 1] });
+              }
+              candidates.push({ area, pts });
+              approx.delete();
+              break;
+            }
+            approx.delete();
+          }
+        }
+        c.delete();
+      }
+      contours.delete(); hierarchy.delete();
+      return candidates;
+    }
+
+    // 4点を座標の和・差でTL/TR/BR/BLに並び替える（多少の回転があっても頑健）
+    function sortQuadCorners(pts) {
+      const bySum = [...pts].sort((a, b) => (a.x + a.y) - (b.x + b.y));
+      const byDiff = [...pts].sort((a, b) => (a.x - a.y) - (b.x - b.y));
+      return {
+        topLeft: bySum[0],
+        bottomRight: bySum[3],
+        topRight: byDiff[3],
+        bottomLeft: byDiff[0],
+      };
+    }
+
+    function isPlausibleCardAspect(corners) {
+      const w = (dist(corners.topLeft, corners.topRight) + dist(corners.bottomLeft, corners.bottomRight)) / 2;
+      const h = (dist(corners.topLeft, corners.bottomLeft) + dist(corners.topRight, corners.bottomRight)) / 2;
+      const aspect = w / h;
+      const normalizedAspect = aspect > 1 ? 1 / aspect : aspect;
+      // 0.55〜0.85が実寸比率(63/88≒0.716)に基づく理論値だが、頂点検出の数px単位の
+      // 誤差でも比率が数%動きうるため、明らかな誤検出（ほぼ正方形など）だけを弾けるよう
+      // 少し余裕を持たせる。
+      return normalizedAspect >= 0.5 && normalizedAspect <= 0.9;
+    }
+
+    // Cannyエッジ全体の凸包（Convex Hull）から4頂点を近似する。
+    // 輪郭を1つの閉じたループとして追跡する方式と違い、カード内部のイラスト・文字の
+    // エッジがどれだけ複雑・断片的でも、それらがカードの外周を越えない限り凸包には
+    // 影響しない。そのため背景とカードの明度が近く境界線が途切れがちな場合でも、
+    // より頑健に外形（4隅）を推定できる。
+    function findQuadHullCandidates(rawEdgesMat, totalArea) {
+      const contours = new cv.MatVector();
+      const hierarchy = new cv.Mat();
+      cv.findContours(rawEdgesMat, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+      const n = contours.size();
+      const allPts = [];
+      for (let i = 0; i < n; i++) {
+        const c = contours.get(i);
+        for (let r = 0; r < c.rows; r++) {
+          allPts.push(c.data32S[r * 2], c.data32S[r * 2 + 1]);
+        }
+        c.delete();
+      }
+      contours.delete(); hierarchy.delete();
+      if (allPts.length < 6) return [];
+
+      const ptsMat = cv.matFromArray(allPts.length / 2, 1, cv.CV_32SC2, allPts);
+      const hull = new cv.Mat();
+      cv.convexHull(ptsMat, hull, false, true);
+      const hullArea = cv.contourArea(hull);
+      const peri = cv.arcLength(hull, true);
+
+      const candidates = [];
+      const epsilons = [0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.08, 0.1];
+      for (const eps of epsilons) {
+        const approx = new cv.Mat();
+        cv.approxPolyDP(hull, approx, eps * peri, true);
+        if (approx.rows === 4) {
+          const pts = [];
+          for (let k = 0; k < 4; k++) pts.push({ x: approx.data32S[k * 2], y: approx.data32S[k * 2 + 1] });
+          candidates.push({ area: hullArea, pts });
+          approx.delete();
+          break;
+        }
+        approx.delete();
+      }
+      ptsMat.delete(); hull.delete();
+      return candidates.filter((cd) => cd.area > totalArea * 0.1);
+    }
+
+    // カード4頂点の検出。輪郭近似（斜め撮影・回転に強い）を優先し、
+    // それで見つからない場合のみ直線検出＋分類方式（従来手法）にフォールバックする。
+    //
+    // 輪郭の抽出元は4種類試す：
+    //   1) Otsu二値化（そのまま）
+    //   2) Otsu二値化の反転
+    //   3) Cannyエッジを膨張させたもの
+    //   4) Cannyエッジ全体の凸包（Convex Hull）
+    // 背景とカードの明度が近いと、Otsu二値化では両者が同じ明度クラスにまとまってしまい
+    // 「最大の輪郭」＝画面のほぼ全体、という誤検出が起きうる（実写真で確認済み）。
+    // また2)3)のような「1本の閉じたループを辿る」方式は、カード内部のイラスト・文字の
+    // エッジと外周のエッジが近接/接触していると内部に引きずられて歪んだ形になりやすい。
+    // 4)の凸包方式は内部のどんな複雑な絵柄も外周を越えない限り影響しないため、
+    // そうしたケースに強い（実写真ベースの検証で最も精度が高かった）。
+    // すべての候補は面積の大きい順に並べ、アスペクト比がカードらしい最初の1つを採用する。
+    function detectCardCorners(src, gray, binary, segments) {
+      const totalArea = src.cols * src.rows;
+
+      const inverted = new cv.Mat();
+      cv.bitwise_not(binary, inverted);
+
+      const rawEdges = new cv.Mat();
+      cv.Canny(gray, rawEdges, 50, 150);
+
+      const edgesForContour = new cv.Mat();
+      rawEdges.copyTo(edgesForContour);
+      const kernel = cv.Mat.ones(5, 5, cv.CV_8U);
+      cv.dilate(edgesForContour, edgesForContour, kernel, new cv.Point(-1, -1), 2);
+      kernel.delete();
+
+      const allCandidates = [
+        ...findQuadHullCandidates(rawEdges, totalArea),
+        ...findQuadContourCandidates(binary, totalArea),
+        ...findQuadContourCandidates(inverted, totalArea),
+        ...findQuadContourCandidates(edgesForContour, totalArea),
+      ];
+      inverted.delete();
+      rawEdges.delete();
+      edgesForContour.delete();
+
+      allCandidates.sort((a, b) => b.area - a.area);
+      for (const cand of allCandidates) {
+        const corners = sortQuadCorners(cand.pts);
+        if (isPlausibleCardAspect(corners)) return { corners, method: 'contour' };
+      }
+
+      if (segments.length >= 4) {
+        const roi = findCardROI(binary, totalArea);
+        const filteredSegments = filterSegmentsByROI(segments, roi);
+        const grouped = classifyLines(filteredSegments, src.cols, src.rows);
+        if (grouped.top && grouped.bottom && grouped.left && grouped.right) {
+          const corners = computeVirtualVertices(grouped);
+          if (corners) return { corners, method: 'lines' };
+        }
+      }
+      return null;
     }
 
     // 二値化画像（正・反転の両方）から最大の輪郭を探し、カードらしい縦横比に近い方を採用する
@@ -939,7 +1087,7 @@
       return { topLeft, topRight, bottomLeft, bottomRight };
     }
 
-    function drawDebugOverlay(srcCanvas, grouped, corners) {
+    function drawDebugOverlay(srcCanvas, corners) {
       canvasWrap.style.display = 'block';
       canvas.width = srcCanvas.width;
       canvas.height = srcCanvas.height;
@@ -1445,23 +1593,11 @@
             x2: lines.data32S[i * 4 + 2], y2: lines.data32S[i * 4 + 3],
           });
         }
-        if (segments.length < 4) return null;
 
-        const roi = findCardROI(binary, src.cols * src.rows);
-        const filtered = filterSegmentsByROI(segments, roi);
-        const grouped = classifyLines(filtered, src.cols, src.rows);
-        if (!grouped.top || !grouped.bottom || !grouped.left || !grouped.right) return null;
+        const detection = detectCardCorners(src, gray, binary, segments);
+        if (!detection || !isPlausibleCardAspect(detection.corners)) return null;
 
-        const corners = computeVirtualVertices(grouped);
-        if (!corners) return null;
-
-        const detectedW = (dist(corners.topLeft, corners.topRight) + dist(corners.bottomLeft, corners.bottomRight)) / 2;
-        const detectedH = (dist(corners.topLeft, corners.bottomLeft) + dist(corners.topRight, corners.bottomRight)) / 2;
-        const aspect = detectedW / detectedH;
-        const normalizedAspect = aspect > 1 ? 1 / aspect : aspect;
-        if (normalizedAspect < 0.55 || normalizedAspect > 0.85) return null;
-
-        const warped = track(warpCard(src, corners, 0.15));
+        const warped = track(warpCard(src, detection.corners, 0.15));
         const outCanvas = document.createElement('canvas');
         cv.imshow(outCanvas, warped);
         return outCanvas;
