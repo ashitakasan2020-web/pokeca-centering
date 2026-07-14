@@ -194,6 +194,7 @@
 
       <div class="manual-instruction" id="manual-instruction" style="display:none;"></div>
       <div class="manual-substatus" id="manual-substatus"></div>
+      <button class="btn btn-reset" id="manual-rotate-btn" style="display:none;margin-bottom:8px;">🔄 画像を90度回転（上下逆さま等の場合）</button>
       <div class="manual-progress" id="manual-progress" style="display:none;">
         <div class="mstep" data-idx="0">左外</div>
         <div class="mstep" data-idx="1">左内</div>
@@ -1364,10 +1365,18 @@
     const manualActionBtns = document.getElementById('manual-action-btns');
     const manualUndoBtn = document.getElementById('manual-undo-btn');
     const manualResetBtn = document.getElementById('manual-reset-btn');
+    const manualRotateBtn = document.getElementById('manual-rotate-btn');
     const manualCaptureBtns = document.getElementById('manual-capture-btns');
 
     manualUndoBtn.addEventListener('click', manualUndo);
     manualResetBtn.addEventListener('click', () => { resetManualFlow(); setStatus('もう一度撮影してください'); });
+    manualRotateBtn.addEventListener('click', () => {
+      if (!manualImage) return;
+      // 上下逆さま等、幾何学的な検出だけでは判定できない向きのズレをユーザー自身が直せるようにする。
+      // 途中まで打った点は向きが変わると意味を持たなくなるため、回転時にリセットする。
+      const rotated = rotateCanvas90(manualImage, 1);
+      setupManualCanvas(rotated);
+    });
     manualProgress.addEventListener('click', (e) => {
       const el = e.target.closest('.mstep');
       if (!el) return;
@@ -1388,28 +1397,33 @@
       manualProgress.style.display = 'none';
       manualZoomHint.style.display = 'none';
       manualActionBtns.style.display = 'none';
+      manualRotateBtn.style.display = 'none';
       manualCaptureBtns.style.display = 'flex';
       manualSubstatus.textContent = '';
       setStatus('カード全体の写真を1枚撮影してください');
     }
 
-    function startManualCapture(imgElement) {
-      setStatus('画像を解析中...');
-      const MAX_DIM = 1400;
-      let scale = 1;
-      if (imgElement.width > MAX_DIM || imgElement.height > MAX_DIM) {
-        scale = MAX_DIM / Math.max(imgElement.width, imgElement.height);
+    // canvasを90度回転した新しいcanvasを返す（direction: 1=時計回り, -1=反時計回り）
+    function rotateCanvas90(srcCanvas, direction) {
+      const rotated = document.createElement('canvas');
+      rotated.width = srcCanvas.height;
+      rotated.height = srcCanvas.width;
+      const ctx = rotated.getContext('2d');
+      if (direction === 1) {
+        ctx.translate(rotated.width, 0);
+        ctx.rotate(Math.PI / 2);
+      } else {
+        ctx.translate(0, rotated.height);
+        ctx.rotate(-Math.PI / 2);
       }
-      const srcCanvas = document.createElement('canvas');
-      srcCanvas.width = Math.round(imgElement.width * scale);
-      srcCanvas.height = Math.round(imgElement.height * scale);
-      srcCanvas.getContext('2d').drawImage(imgElement, 0, 0, srcCanvas.width, srcCanvas.height);
+      ctx.drawImage(srcCanvas, 0, 0);
+      return rotated;
+    }
 
-      let baseSource = srcCanvas;
-      let usedAutoCorrect = false;
+    // カード検出＋傾き補正を1パターン試す。成功すれば補正後canvasを、失敗すればnullを返す。
+    function tryDetectAndWarpForManual(srcCanvas) {
       const mats = [];
       const track = (m) => { mats.push(m); return m; };
-
       try {
         const src = track(cv.imread(srcCanvas));
         const blurred = track(new cv.Mat());
@@ -1431,38 +1445,66 @@
             x2: lines.data32S[i * 4 + 2], y2: lines.data32S[i * 4 + 3],
           });
         }
+        if (segments.length < 4) return null;
 
-        if (segments.length >= 4) {
-          const roi = findCardROI(binary, src.cols * src.rows);
-          const filtered = filterSegmentsByROI(segments, roi);
-          const grouped = classifyLines(filtered, src.cols, src.rows);
-          if (grouped.top && grouped.bottom && grouped.left && grouped.right) {
-            const corners = computeVirtualVertices(grouped);
-            if (corners) {
-              const detectedW = (dist(corners.topLeft, corners.topRight) + dist(corners.bottomLeft, corners.bottomRight)) / 2;
-              const detectedH = (dist(corners.topLeft, corners.bottomLeft) + dist(corners.topRight, corners.bottomRight)) / 2;
-              const aspect = detectedW / detectedH;
-              const normalizedAspect = aspect > 1 ? 1 / aspect : aspect;
-              if (normalizedAspect >= 0.55 && normalizedAspect <= 0.85) {
-                const warped = track(warpCard(src, corners, 0.15));
-                const outCanvas = document.createElement('canvas');
-                cv.imshow(outCanvas, warped);
-                baseSource = outCanvas;
-                usedAutoCorrect = true;
-              }
-            }
-          }
-        }
+        const roi = findCardROI(binary, src.cols * src.rows);
+        const filtered = filterSegmentsByROI(segments, roi);
+        const grouped = classifyLines(filtered, src.cols, src.rows);
+        if (!grouped.top || !grouped.bottom || !grouped.left || !grouped.right) return null;
+
+        const corners = computeVirtualVertices(grouped);
+        if (!corners) return null;
+
+        const detectedW = (dist(corners.topLeft, corners.topRight) + dist(corners.bottomLeft, corners.bottomRight)) / 2;
+        const detectedH = (dist(corners.topLeft, corners.bottomLeft) + dist(corners.topRight, corners.bottomRight)) / 2;
+        const aspect = detectedW / detectedH;
+        const normalizedAspect = aspect > 1 ? 1 / aspect : aspect;
+        if (normalizedAspect < 0.55 || normalizedAspect > 0.85) return null;
+
+        const warped = track(warpCard(src, corners, 0.15));
+        const outCanvas = document.createElement('canvas');
+        cv.imshow(outCanvas, warped);
+        return outCanvas;
       } catch (e) {
-        console.error('manual auto-correct failed', e);
+        console.error('manual auto-correct candidate failed', e);
+        return null;
       } finally {
         cleanup(mats);
+      }
+    }
+
+    function startManualCapture(imgElement) {
+      setStatus('画像を解析中...');
+      const MAX_DIM = 1400;
+      let scale = 1;
+      if (imgElement.width > MAX_DIM || imgElement.height > MAX_DIM) {
+        scale = MAX_DIM / Math.max(imgElement.width, imgElement.height);
+      }
+      const baseCanvas = document.createElement('canvas');
+      baseCanvas.width = Math.round(imgElement.width * scale);
+      baseCanvas.height = Math.round(imgElement.height * scale);
+      baseCanvas.getContext('2d').drawImage(imgElement, 0, 0, baseCanvas.width, baseCanvas.height);
+
+      // カメラを横向きにして撮影した場合も検出できるよう、元の向き・時計回り90度・
+      // 反時計回り90度の3パターンで検出を試し、最初に成功したものを採用する。
+      const candidates = [baseCanvas, rotateCanvas90(baseCanvas, 1), rotateCanvas90(baseCanvas, -1)];
+      let baseSource = null;
+      let usedAutoCorrect = false;
+      for (const candidate of candidates) {
+        const result = tryDetectAndWarpForManual(candidate);
+        if (result) { baseSource = result; usedAutoCorrect = true; break; }
+      }
+
+      if (!baseSource) {
+        // 自動検出できなかった場合でも、写真全体が横長（＝カメラが横向き）なら
+        // 縦向きに回転してから表示する（採寸自体は傾いたままでも2点タップなので支障はない）。
+        baseSource = baseCanvas.width > baseCanvas.height ? rotateCanvas90(baseCanvas, 1) : baseCanvas;
       }
 
       setupManualCanvas(baseSource);
       manualSubstatus.textContent = usedAutoCorrect
         ? '✅ 傾きを自動補正しました。ピンチで拡大して各辺の線を指定してください'
-        : '⚠️ 自動補正できなかったため、元の写真のまま採寸します（傾いていても2点タップの直線指定なら問題ありません）';
+        : '⚠️ 自動補正できなかったため、向きの補正のみ行った状態で採寸します（傾いていても2点タップの直線指定なら問題ありません）';
       setStatus('');
     }
 
@@ -1484,6 +1526,7 @@
       manualProgress.style.display = 'flex';
       manualZoomHint.style.display = 'block';
       manualActionBtns.style.display = 'flex';
+      manualRotateBtn.style.display = 'block';
 
       const rect = manualViewport.getBoundingClientRect();
       const fitScale = Math.min(rect.width / sourceCanvas.width, rect.height / sourceCanvas.height, 1);
