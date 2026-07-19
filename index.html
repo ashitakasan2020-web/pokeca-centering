@@ -147,7 +147,7 @@
     <h1>📐 ポケカ センタリング判定</h1>
     <div class="subtitle">カードを撮影して枠のセンタリングを自動計測</div>
     <div class="badge">MVP版 / PSA基準(2025年2月改定)対応</div>
-    <div style="font-size:11px;color:#6e7681;margin-top:4px;">最終更新: 2026-07-19-6</div>
+    <div style="font-size:11px;color:#6e7681;margin-top:4px;">最終更新: 2026-07-19-7</div>
   </div>
 
   <div class="section">
@@ -1682,8 +1682,19 @@
       if (!manualImage) return;
       // 上下逆さま等、幾何学的な検出だけでは判定できない向きのズレをユーザー自身が直せるようにする。
       // 途中まで打った点は向きが変わると意味を持たなくなるため、回転時にリセットする。
+      const wasCornerPicking = manualCornerPickActive;
       const rotated = rotateCanvas90(manualImage, 1);
       setupManualCanvas(rotated);
+      if (wasCornerPicking) {
+        // setupManualCanvas()は通常の8点枠選択モードに戻してしまうため、
+        // 回転前が4隅指定モードだった場合はここで指定し直す(cornerPickContextは維持されたまま)。
+        manualCornerPickActive = true;
+        manualCornerPoints = [];
+        manualProgress.style.display = 'none';
+        manualInstruction.textContent = CORNER_PICK_LABELS[0];
+        manualSubstatus.textContent = '4隅をタップし直してください';
+        redrawManualCanvas();
+      }
     });
     manualProgress.addEventListener('click', (e) => {
       const el = e.target.closest('.mstep');
