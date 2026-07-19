@@ -147,6 +147,7 @@
     <h1>📐 ポケカ センタリング判定</h1>
     <div class="subtitle">カードを撮影して枠のセンタリングを自動計測</div>
     <div class="badge">MVP版 / PSA基準(2025年2月改定)対応</div>
+    <div style="font-size:11px;color:#6e7681;margin-top:4px;">最終更新: 2026-07-19-4</div>
   </div>
 
   <div class="section">
@@ -161,6 +162,10 @@
       <div class="btn-group">
         <button class="btn btn-camera" id="camera-btn">📷 カメラで撮影</button>
         <button class="btn btn-file" id="file-btn">🖼️ ギャラリーから</button>
+      </div>
+      <div class="btn-group" style="margin-top:8px;">
+        <button class="btn btn-camera" id="full-corner-camera-btn">📷 手動4隅指定で撮影</button>
+        <button class="btn btn-file" id="full-corner-file-btn">🖼️ 手動4隅指定でギャラリーから</button>
       </div>
     </div>
 
@@ -195,6 +200,8 @@
       <div class="manual-instruction" id="manual-instruction" style="display:none;"></div>
       <div class="manual-substatus" id="manual-substatus"></div>
       <button class="btn btn-reset" id="manual-rotate-btn" style="display:none;margin-bottom:8px;">🔄 画像を90度回転（上下逆さま等の場合）</button>
+      <button class="btn btn-reset" id="manual-undo-autocorrect-btn" style="display:none;margin-bottom:8px;">↩️ 直前の補正を取り消す</button>
+      <button class="btn btn-reset" id="manual-corner-pick-btn" style="display:none;margin-bottom:8px;">✋ 手動で4隅を指定して補正</button>
       <div class="manual-progress" id="manual-progress" style="display:none;">
         <div class="mstep" data-idx="0">左外</div>
         <div class="mstep" data-idx="1">左内</div>
@@ -328,6 +335,8 @@
 
     const cameraBtn = document.getElementById('camera-btn');
     const fileBtn = document.getElementById('file-btn');
+    const fullCornerCameraBtn = document.getElementById('full-corner-camera-btn');
+    const fullCornerFileBtn = document.getElementById('full-corner-file-btn');
     const cornerCameraBtn = document.getElementById('corner-camera-btn');
     const cornerFileBtn = document.getElementById('corner-file-btn');
     const manualCameraBtn = document.getElementById('manual-camera-btn');
@@ -339,10 +348,14 @@
     const canvas = document.getElementById('output-canvas');
     const resultSection = document.getElementById('result-section');
 
+    let pendingFullCornerPick = false; // 「全体撮影」モードで手動4隅指定ボタン経由の撮影かどうか
+
     setStatus('OpenCV.js 読み込み中...');
 
     cameraBtn.addEventListener('click', () => { fileInputCamera.value = ''; fileInputCamera.click(); });
     fileBtn.addEventListener('click', () => { fileInputGallery.value = ''; fileInputGallery.click(); });
+    fullCornerCameraBtn.addEventListener('click', () => { pendingFullCornerPick = true; fileInputCamera.value = ''; fileInputCamera.click(); });
+    fullCornerFileBtn.addEventListener('click', () => { pendingFullCornerPick = true; fileInputGallery.value = ''; fileInputGallery.click(); });
     cornerCameraBtn.addEventListener('click', () => { fileInputCamera.value = ''; fileInputCamera.click(); });
     cornerFileBtn.addEventListener('click', () => { fileInputGallery.value = ''; fileInputGallery.click(); });
     manualCameraBtn.addEventListener('click', () => { fileInputCamera.value = ''; fileInputCamera.click(); });
@@ -362,7 +375,10 @@
       const img = new Image();
       img.onload = () => {
         try {
-          if (mode === 'full') {
+          if (pendingFullCornerPick) {
+            pendingFullCornerPick = false;
+            enterFullModeCornerPick(img);
+          } else if (mode === 'full') {
             setStatus('画像を解析中...');
             analyzeImage(img);
           } else if (mode === 'corner') {
@@ -1158,6 +1174,113 @@
       return dst;
     }
 
+    const CARD_WIDTH_MM = 63;
+    const CARD_HEIGHT_MM = 88;
+    const MANUAL_CORNER_MARGIN_MM = 5; // 指定範囲の外(カード外側)も見えるよう周囲に持たせる余白
+
+    // ユーザーがタップした4隅(topLeft, topRight, bottomRight, bottomLeft)から、
+    // ポケモンカードの実寸比率(63:88)を強制した長方形へ透視変換する(手動4隅指定用)。
+    // warpCard()と違い、実測した幅・高さをそのまま使わず、既知の正しい比率に合わせる。
+    // 実寸(mm)が分かっているため、周囲の余白も比率ではなくMANUAL_CORNER_MARGIN_MMのmm数で計算する。
+    function warpToCardAspect(src, corners) {
+      const { topLeft, topRight, bottomRight, bottomLeft } = corners;
+
+      const widthTop = dist(topLeft, topRight);
+      const widthBottom = dist(bottomLeft, bottomRight);
+      const avgWidth = (widthTop + widthBottom) / 2;
+
+      const heightLeft = dist(topLeft, bottomLeft);
+      const heightRight = dist(topRight, bottomRight);
+      const avgHeight = (heightLeft + heightRight) / 2;
+
+      // 実測値のうち、比率換算で大きい方の辺を基準にし、もう一方はCARD_ASPECTから求める
+      // (2辺それぞれの実測誤差が独立に乗るのを避けるため)。
+      let outWidth, outHeight;
+      if (avgHeight * CARD_ASPECT >= avgWidth) {
+        outHeight = Math.round(avgHeight);
+        outWidth = Math.round(outHeight * CARD_ASPECT);
+      } else {
+        outWidth = Math.round(avgWidth);
+        outHeight = Math.round(outWidth / CARD_ASPECT);
+      }
+
+      // outWidth/outHeightは常に63:88になるため、どちらから求めても同じmm換算になる。
+      const pxPerMm = outWidth / CARD_WIDTH_MM;
+      const marginPx = Math.round(MANUAL_CORNER_MARGIN_MM * pxPerMm);
+      const finalWidth = outWidth + marginPx * 2;
+      const finalHeight = outHeight + marginPx * 2;
+
+      const srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
+        topLeft.x, topLeft.y,
+        topRight.x, topRight.y,
+        bottomRight.x, bottomRight.y,
+        bottomLeft.x, bottomLeft.y,
+      ]);
+      const dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
+        marginPx, marginPx,
+        marginPx + outWidth, marginPx,
+        marginPx + outWidth, marginPx + outHeight,
+        marginPx, marginPx + outHeight,
+      ]);
+
+      const M = cv.getPerspectiveTransform(srcTri, dstTri);
+      const dst = new cv.Mat();
+      cv.warpPerspective(src, dst, M, new cv.Size(finalWidth, finalHeight), cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar());
+
+      srcTri.delete(); dstTri.delete(); M.delete();
+      return dst;
+    }
+
+    function finishCornerPick() {
+      const mats = [];
+      const track = (m) => { mats.push(m); return m; };
+      try {
+        const src = track(cv.imread(manualImage));
+        const corners = {
+          topLeft: manualCornerPoints[0],
+          topRight: manualCornerPoints[1],
+          bottomRight: manualCornerPoints[2],
+          bottomLeft: manualCornerPoints[3],
+        };
+        const warped = track(warpToCardAspect(src, corners));
+
+        if (cornerPickContext === 'full') {
+          // 全体撮影モード経由:枠指定には進まず、そのまま自動計測して結果を表示する
+          manualCornerPickActive = false;
+          manualCornerPoints = [];
+          manualModeUI.style.display = 'none';
+          fullModeUI.style.display = 'block';
+          cornerPickContext = 'manual';
+
+          const borders = measureBorders(warped);
+          const centering = computeCentering(borders);
+          const gradeInfo = estimateGrade(centering);
+          renderResults(centering, gradeInfo, warped, borders);
+          setStatus('');
+          return;
+        }
+
+        const outCanvas = document.createElement('canvas');
+        cv.imshow(outCanvas, warped);
+
+        const prevSource = manualImage; // この4隅指定を適用する前の画像(やり直し用に保持)
+        manualCornerPickActive = false;
+        manualCornerPoints = [];
+        setupManualCanvas(outCanvas);
+        manualPreCorrectSource = prevSource;
+        manualUndoAutoCorrectBtn.style.display = 'block';
+        manualSubstatus.textContent = '✅ 指定した4隅でポケモンカードの縦横比(63:88)に補正しました(周囲5mm分の余白付き)。ズレている場合は「直前の補正を取り消す」を押してやり直せます。ピンチで拡大して各辺の線を指定してください';
+      } catch (e) {
+        console.error('manual corner warp failed', e);
+        alert('補正に失敗しました。もう一度4隅を指定し直してください。');
+        manualCornerPickActive = false;
+        manualCornerPoints = [];
+        redrawManualCanvas();
+      } finally {
+        cleanup(mats);
+      }
+    }
+
     // 勾配マット上で、fromStart側の端から内側へ走査し「立ち上がりが最も急な位置」
     // （ボーダー→柄の境界）までの距離を返す共通ロジック。
     // isRow=trueなら行方向(横一列)を固定して列方向に走査、falseなら列を固定して行方向に走査。
@@ -1502,6 +1625,17 @@
     // 指1本＝点の配置・微調整、指2本＝画像の移動／拡大縮小（ピンチ）。
     let manualGestureMode = null; // 'point' | 'pinch' | null
     let manualPointDrag = null;   // { pointerId, previewImgPt }
+    let manualPreCorrectSource = null; // 直前の補正(自動補正 or 手動4隅指定)を適用する前のcanvas
+    let manualCornerPickActive = false; // 手動4隅指定モード中か
+    let manualCornerPoints = [];        // 手動4隅指定モードでタップした点(左上→右上→右下→左下)
+    let cornerPickContext = 'manual';   // 4隅指定完了後の遷移先('manual'=枠指定へ進む / 'full'=自動計測して結果表示)
+    const CARD_ASPECT = 63 / 88;        // ポケモンカードの実寸比率(幅/高さ)
+    const CORNER_PICK_LABELS = [
+      '① 左上の角をタップしてください',
+      '② 右上の角をタップしてください',
+      '③ 右下の角をタップしてください',
+      '④ 左下の角をタップしてください',
+    ];
 
     const manualViewport = document.getElementById('manual-viewport');
     const manualCanvas = document.getElementById('manual-canvas');
@@ -1514,9 +1648,35 @@
     const manualUndoBtn = document.getElementById('manual-undo-btn');
     const manualResetBtn = document.getElementById('manual-reset-btn');
     const manualRotateBtn = document.getElementById('manual-rotate-btn');
+    const manualUndoAutoCorrectBtn = document.getElementById('manual-undo-autocorrect-btn');
+    const manualCornerPickBtn = document.getElementById('manual-corner-pick-btn');
     const manualCaptureBtns = document.getElementById('manual-capture-btns');
 
     manualUndoBtn.addEventListener('click', manualUndo);
+    manualUndoAutoCorrectBtn.addEventListener('click', () => {
+      if (!manualPreCorrectSource) return;
+      const source = manualPreCorrectSource;
+      manualPreCorrectSource = null;
+      manualUndoAutoCorrectBtn.style.display = 'none';
+      setupManualCanvas(source);
+      manualSubstatus.textContent = '↩️ 直前の補正を取り消しました。傾いたままでも2点タップの直線指定なら問題ありません';
+    });
+    manualCornerPickBtn.addEventListener('click', () => {
+      if (!manualImage) return;
+      if (manualCornerPickActive) {
+        // もう一度押すとキャンセル
+        manualCornerPickActive = false;
+        manualCornerPoints = [];
+        updateManualProgressUI();
+        redrawManualCanvas();
+        return;
+      }
+      manualCornerPickActive = true;
+      manualCornerPoints = [];
+      manualInstruction.textContent = CORNER_PICK_LABELS[0];
+      manualSubstatus.textContent = '4隅をタップして囲むと、ポケモンカードの縦横比(63:88)に補正します。キャンセルする場合はもう一度このボタンを押してください';
+      redrawManualCanvas();
+    });
     manualResetBtn.addEventListener('click', () => { resetManualFlow(); setStatus('もう一度撮影してください'); });
     manualRotateBtn.addEventListener('click', () => {
       if (!manualImage) return;
@@ -1546,6 +1706,20 @@
       manualZoomHint.style.display = 'none';
       manualActionBtns.style.display = 'none';
       manualRotateBtn.style.display = 'none';
+      manualUndoAutoCorrectBtn.style.display = 'none';
+      manualCornerPickBtn.style.display = 'none';
+      manualPreCorrectSource = null;
+      manualCornerPickActive = false;
+      manualCornerPoints = [];
+      if (cornerPickContext === 'full') {
+        // 全体撮影モードの手動4隅指定から途中キャンセルした場合は、元の全体撮影UIに戻す
+        cornerPickContext = 'manual';
+        manualModeUI.style.display = 'none';
+        fullModeUI.style.display = 'block';
+        canvasWrap.style.display = 'none';
+        setStatus('画像を選択してください');
+        return;
+      }
       manualCaptureBtns.style.display = 'flex';
       manualSubstatus.textContent = '';
       canvasWrap.style.display = 'none';
@@ -1610,6 +1784,38 @@
       }
     }
 
+    // 「全体撮影」モードの「手動4隅指定」ボタンから呼ばれる。自動検出は行わず、
+    // 直接4隅タップモードに入る。4隅確定後は自動計測(measureBorders以降)へ進む
+    // (finishCornerPick 内で cornerPickContext === 'full' の場合の分岐を参照)。
+    function enterFullModeCornerPick(imgElement) {
+      const MAX_DIM = 1400;
+      let scale = 1;
+      if (imgElement.width > MAX_DIM || imgElement.height > MAX_DIM) {
+        scale = MAX_DIM / Math.max(imgElement.width, imgElement.height);
+      }
+      const baseCanvas = document.createElement('canvas');
+      baseCanvas.width = Math.round(imgElement.width * scale);
+      baseCanvas.height = Math.round(imgElement.height * scale);
+      baseCanvas.getContext('2d').drawImage(imgElement, 0, 0, baseCanvas.width, baseCanvas.height);
+      // 写真全体が横長(=カメラが横向き)なら縦向きに回転しておく(タップ操作自体は必須ではない)。
+      const baseSource = baseCanvas.width > baseCanvas.height ? rotateCanvas90(baseCanvas, 1) : baseCanvas;
+
+      cornerPickContext = 'full';
+      fullModeUI.style.display = 'none';
+      manualModeUI.style.display = 'block';
+      manualPreCorrectSource = null;
+      manualUndoAutoCorrectBtn.style.display = 'none';
+
+      setupManualCanvas(baseSource);
+      manualProgress.style.display = 'none'; // 全体撮影モードでは8点の枠指定バーは不要
+      manualCornerPickActive = true;
+      manualCornerPoints = [];
+      manualInstruction.textContent = CORNER_PICK_LABELS[0];
+      manualSubstatus.textContent = '4隅をタップして囲むと、自動でセンタリングを計測します';
+      redrawManualCanvas();
+      setStatus('');
+    }
+
     function startManualCapture(imgElement) {
       setStatus('画像を解析中...');
       const MAX_DIM = 1400;
@@ -1627,13 +1833,15 @@
       const candidates = [baseCanvas, rotateCanvas90(baseCanvas, 1), rotateCanvas90(baseCanvas, -1)];
       let baseSource = null;
       let usedAutoCorrect = false;
+      let preCorrectSource = null;
       for (const candidate of candidates) {
         const result = tryDetectAndWarpForManual(candidate);
         if (result) {
           baseSource = result.outCanvas;
           usedAutoCorrect = true;
-          // デバッグ表示：どの4頂点を検出したかを、補正前の写真に重ねて表示する
-          // （検出がズレている場合に原因を確認しやすくするため）。
+          preCorrectSource = result.srcCanvas;
+          // デバッグ表示:どの4頂点を検出したかを、補正前の写真に重ねて表示する
+          // (検出がズレている場合に原因を確認しやすくするため)。
           drawDebugOverlay(result.srcCanvas, result.corners);
           break;
         }
@@ -1646,9 +1854,12 @@
         canvasWrap.style.display = 'none';
       }
 
+      manualPreCorrectSource = preCorrectSource;
+      manualUndoAutoCorrectBtn.style.display = usedAutoCorrect ? 'block' : 'none';
+
       setupManualCanvas(baseSource);
       manualSubstatus.textContent = usedAutoCorrect
-        ? '✅ 傾きを自動補正しました（上の画像は検出した輪郭の確認用）。ピンチで拡大して各辺の線を指定してください'
+        ? '✅ 傾きを自動補正しました（上の画像は検出した輪郭の確認用）。ズレている場合は「直前の補正を取り消す」を押してください。ピンチで拡大して各辺の線を指定してください'
         : '⚠️ 自動補正できなかったため、向きの補正のみ行った状態で採寸します（傾いていても2点タップの直線指定なら問題ありません）';
       setStatus('');
     }
@@ -1664,6 +1875,8 @@
       manualLines = {};
       manualStepIdx = 0;
       manualCurrentPoints = [];
+      manualCornerPickActive = false;
+      manualCornerPoints = [];
 
       manualCaptureBtns.style.display = 'none';
       manualViewport.style.display = 'block';
@@ -1672,6 +1885,7 @@
       manualZoomHint.style.display = 'block';
       manualActionBtns.style.display = 'flex';
       manualRotateBtn.style.display = 'block';
+      manualCornerPickBtn.style.display = 'block';
 
       const rect = manualViewport.getBoundingClientRect();
       const fitScale = Math.min(rect.width / sourceCanvas.width, rect.height / sourceCanvas.height, 1);
@@ -1713,6 +1927,48 @@
 
       const lineWidthPx = Math.max(2, manualCanvas.width * 0.0025);
       const pointRadius = Math.max(4, manualCanvas.width * 0.006);
+
+      if (manualCornerPickActive) {
+        manualCtx.strokeStyle = '#f0c040';
+        manualCtx.fillStyle = '#f0c040';
+        manualCtx.lineWidth = lineWidthPx;
+        if (manualCornerPoints.length > 0) {
+          manualCtx.beginPath();
+          manualCtx.moveTo(manualCornerPoints[0].x, manualCornerPoints[0].y);
+          for (let i = 1; i < manualCornerPoints.length; i++) {
+            manualCtx.lineTo(manualCornerPoints[i].x, manualCornerPoints[i].y);
+          }
+          manualCtx.stroke();
+          for (const p of manualCornerPoints) {
+            manualCtx.beginPath();
+            manualCtx.arc(p.x, p.y, pointRadius, 0, Math.PI * 2);
+            manualCtx.fill();
+          }
+        }
+        if (manualPointDrag && manualPointDrag.previewImgPt) {
+          const p = manualPointDrag.previewImgPt;
+          // 直前の確定点からドラッグ中の点まで、確定前でもリアルタイムに線を表示する
+          if (manualCornerPoints.length > 0) {
+            const last = manualCornerPoints[manualCornerPoints.length - 1];
+            manualCtx.strokeStyle = '#f0c040';
+            manualCtx.lineWidth = lineWidthPx;
+            manualCtx.beginPath();
+            manualCtx.moveTo(last.x, last.y);
+            manualCtx.lineTo(p.x, p.y);
+            manualCtx.stroke();
+          }
+          manualCtx.fillStyle = '#f0c040';
+          manualCtx.beginPath();
+          manualCtx.arc(p.x, p.y, pointRadius, 0, Math.PI * 2);
+          manualCtx.fill();
+          manualCtx.strokeStyle = '#ffffff';
+          manualCtx.lineWidth = Math.max(1.5, lineWidthPx * 0.6);
+          manualCtx.beginPath();
+          manualCtx.arc(p.x, p.y, pointRadius * 2, 0, Math.PI * 2);
+          manualCtx.stroke();
+        }
+        return;
+      }
 
       function drawLine(pts, color) {
         manualCtx.strokeStyle = color;
@@ -1883,13 +2139,25 @@
     }, { passive: false });
 
     function handleManualTap(imgPt) {
-      if (manualStepIdx >= MANUAL_STEPS.length) return;
       // 指ずらし分のオフセットで画像端の外に出た場合は、無視せず端に留めて採用する
       // （そうしないと上端付近の辺を選ぼうとしたタップがすべて無効になってしまう）。
       const clamped = {
         x: Math.min(Math.max(imgPt.x, 0), manualCanvas.width),
         y: Math.min(Math.max(imgPt.y, 0), manualCanvas.height),
       };
+
+      if (manualCornerPickActive) {
+        manualCornerPoints.push(clamped);
+        if (manualCornerPoints.length < 4) {
+          manualInstruction.textContent = CORNER_PICK_LABELS[manualCornerPoints.length];
+          redrawManualCanvas();
+        } else {
+          finishCornerPick();
+        }
+        return;
+      }
+
+      if (manualStepIdx >= MANUAL_STEPS.length) return;
 
       manualCurrentPoints.push(clamped);
       if (manualCurrentPoints.length === 2) {
@@ -1920,6 +2188,14 @@
     }
 
     function manualUndo() {
+      if (manualCornerPickActive) {
+        if (manualCornerPoints.length > 0) {
+          manualCornerPoints.pop();
+          manualInstruction.textContent = CORNER_PICK_LABELS[manualCornerPoints.length];
+        }
+        redrawManualCanvas();
+        return;
+      }
       if (manualStepIdx >= MANUAL_STEPS.length && manualCurrentPoints.length === 0) {
         // 8点すべて指定し結果表示済みの状態から、最後の辺の2点目だけを取り消す
         resultSection.style.display = 'none';
