@@ -147,7 +147,7 @@
     <h1>📐 ポケカ センタリング判定</h1>
     <div class="subtitle">カードを撮影して枠のセンタリングを自動計測</div>
     <div class="badge">MVP版 / PSA基準(2025年2月改定)対応</div>
-    <div style="font-size:11px;color:#6e7681;margin-top:4px;">最終更新: 2026-07-19-5</div>
+    <div style="font-size:11px;color:#6e7681;margin-top:4px;">最終更新: 2026-07-19-6</div>
   </div>
 
   <div class="section">
@@ -1955,6 +1955,16 @@
             manualCtx.beginPath();
             manualCtx.moveTo(last.x, last.y);
             manualCtx.lineTo(p.x, p.y);
+            manualCtx.stroke();
+          }
+          // 4点目をドラッグ中は、閉じた四角形が見えるよう1点目への線も表示する
+          if (manualCornerPoints.length === 3) {
+            const first = manualCornerPoints[0];
+            manualCtx.strokeStyle = '#f0c040';
+            manualCtx.lineWidth = lineWidthPx;
+            manualCtx.beginPath();
+            manualCtx.moveTo(p.x, p.y);
+            manualCtx.lineTo(first.x, first.y);
             manualCtx.stroke();
           }
           manualCtx.fillStyle = '#f0c040';
