@@ -147,7 +147,7 @@
     <h1>📐 ポケカ センタリング判定</h1>
     <div class="subtitle">カードを撮影して枠のセンタリングを自動計測</div>
     <div class="badge">MVP版 / PSA基準(2025年2月改定)対応</div>
-    <div style="font-size:11px;color:#6e7681;margin-top:4px;">最終更新: 2026-07-19-4</div>
+    <div style="font-size:11px;color:#6e7681;margin-top:4px;">最終更新: 2026-07-19-5</div>
   </div>
 
   <div class="section">
@@ -2004,6 +2004,15 @@
       if (manualPointDrag && manualPointDrag.previewImgPt && manualStepIdx < MANUAL_STEPS.length) {
         const step = MANUAL_STEPS[manualStepIdx];
         const p = manualPointDrag.previewImgPt;
+        // 1点目が確定済み(2点目をタップ中)の場合、確定前でも1点目からの線をリアルタイムに表示する
+        if (manualCurrentPoints.length === 1) {
+          manualCtx.strokeStyle = MANUAL_COLORS[step.kind];
+          manualCtx.lineWidth = lineWidthPx;
+          manualCtx.beginPath();
+          manualCtx.moveTo(manualCurrentPoints[0].x, manualCurrentPoints[0].y);
+          manualCtx.lineTo(p.x, p.y);
+          manualCtx.stroke();
+        }
         manualCtx.fillStyle = MANUAL_COLORS[step.kind];
         manualCtx.beginPath();
         manualCtx.arc(p.x, p.y, pointRadius, 0, Math.PI * 2);
